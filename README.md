@@ -1,7 +1,7 @@
 
  
 # Modificare codice e mettere up su gh e docker  #
-[![Docker Image](https://img.shields.io/badge/Docker_Hub-emarusso%2Fdistributed--rf-blue?logo=docker)](https://hub.docker.com/r/emarusso/distributed-rf)
+
 clonati repo da github
 Modifichi codice
 
