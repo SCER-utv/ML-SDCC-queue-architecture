@@ -27,11 +27,19 @@ connettiti ssh
 
 ### Se istanza nuova ###
 
-``` sudo apt-get update -y ```
-``` sudo apt-get install docker.io -y ``` 
+``` 
+sudo apt-get update -y
+```
+``` 
+sudo apt-get install docker.io -y
+``` 
 
-``` sudo systemctl start docker ``` 
-``` sudo systemctl enable docker ``` 
+``` 
+sudo systemctl start docker
+``` 
+``` 
+sudo systemctl enable docker
+``` 
 
 ``` sudo docker pull emarusso/distributed-rf:latest ```
 ``` sudo docker run -d \ --name master-node \ --restart always \ emarusso/distributed-rf:latest \ python -u src/master.py ```
