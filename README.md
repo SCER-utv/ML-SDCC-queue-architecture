@@ -1,6 +1,6 @@
 
  
-##############################. Modificare codice e mettere up su gh e docker  ##################################
+# Modificare codice e mettere up su gh e docker  #
 
 #clonati repo da github
 #Modifichi codice
