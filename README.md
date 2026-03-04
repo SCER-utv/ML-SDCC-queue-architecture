@@ -2,12 +2,12 @@
  
 # Modificare codice e mettere up su gh e docker  #
 
-#clonati repo da github
-#Modifichi codice
+clonati repo da github
+Modifichi codice
 
-#Impacchetta facendo nel terminale della cartella del progetto:
+# Impacchetta facendo nel terminale della cartella del progetto:
 
-docker build --platform linux/amd64 -t emarusso/distributed-rf:latest .
+``` docker build --platform linux/amd64 -t emarusso/distributed-rf:latest . ```
 
 #loggati al tuo account, sempre nello stesso terminale facendo:
 
