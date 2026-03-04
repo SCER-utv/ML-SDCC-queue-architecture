@@ -1,0 +1,20 @@
+{
+  "model_id": "rf_distributed",
+  "models_directory": "models/checkpoints/",
+  "s3_bucket": "distributed-random-forest-bkt",
+
+  "paths": {
+    "ids": {
+      "train": "data/processed/ids/ids_train.csv",
+      "test": "data/processed/ids/ids_test.csv"
+    },
+    "taxi": {
+      "train": "data/processed/taxi/taxi_train.csv",
+      "test": "data/processed/taxi/taxi_test.csv"
+    },
+    "higgs": {
+      "train": "data/processed/higgs/higgs_train.csv",
+      "test": "data/processed/higgs/higgs_test.csv"
+    }
+  }
+}
