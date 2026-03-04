@@ -103,11 +103,13 @@ sudo docker rm -f worker-node
 # Messaggio del client al master  #
 inserisci nella coda sqs un messaggio formattato cosi:
 
-```{```
-```"dataset": "higgs",```
-```"num_workers":5,```
-```"num_trees":5```
-```} ```
+```
+{
+"dataset": "higgs",
+"num_workers":5,
+"num_trees":5
+}
+```
 
 
 
