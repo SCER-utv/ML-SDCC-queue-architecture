@@ -41,23 +41,35 @@ sudo systemctl start docker
 sudo systemctl enable docker
 ``` 
 
-``` sudo docker pull emarusso/distributed-rf:latest ```
-``` sudo docker run -d \ --name master-node \ --restart always \ emarusso/distributed-rf:latest \ python -u src/master.py ```
+``` 
+sudo docker pull emarusso/distributed-rf:latest
+```
+``` 
+sudo docker run -d \ --name master-node \ --restart always \ emarusso/distributed-rf:latest \ python -u src/master.py
+```
 
 
 ### Se istanza l'avevi già avviata in passato ti basta fare:
  
- ``` sudo docker pull emarusso/distributed-rf:latest ``` 
-``` sudo docker run -d \ --name master-node \ --restart always \ emarusso/distributed-rf:latest \ python -u src/master.py ```
+ ``` 
+ sudo docker pull emarusso/distributed-rf:latest
+``` 
+``` 
+sudo docker run -d \ --name master-node \ --restart always \ emarusso/distributed-rf:latest \ python -u src/master.py
+```
 
 
 ### visualizza log master
 
-``` sudo docker logs -f master-node ```
+``` 
+sudo docker logs -f master-node
+```
 
 ### per terminare container
 
-``` sudo docker rm -f master-node ```
+``` 
+sudo docker rm -f master-node
+```
 
 
 
@@ -66,28 +78,36 @@ sudo systemctl enable docker
 L'istanza si avvierà automaticamente con ASG
 connettiti ssh facendo:
  
-``` ssh -i "distributed-random-forest-key.pem" ec2-user@ip pubblico ```
+``` 
+ssh -i "distributed-random-forest-key.pem" ec2-user@ip pubblico
+```
 
 attendi che docker sia up, lo puoi controllare con:
 
-``` sudo docker ps ```
+``` 
+sudo docker ps
+```
 
 Una volta online, ti basta fare:
 
-``` sudo docker logs -f worker-node ```
+``` 
+sudo docker logs -f worker-node
+```
 
 Per terminare container:
 
-``` sudo docker rm -f worker-node ```
+``` 
+sudo docker rm -f worker-node
+```
 
 # Messaggio del client al master  #
 inserisci nella coda sqs un messaggio formattato cosi:
 
-{
-"dataset": "higgs",
-"num_workers":5,
-"num_trees":5
-} 
+```{```
+```"dataset": "higgs",```
+```"num_workers":5,```
+```"num_trees":5```
+```} ```
 
 
 
