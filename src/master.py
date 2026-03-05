@@ -2,6 +2,9 @@ import boto3
 import json
 import math
 import os
+import time
+import io
+import botocore
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score
@@ -26,12 +29,11 @@ ASG_NAME = 'DRF-Worker-ASG-new'
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
 
-
 # ==========================================
 # FUNZIONI DI SUPPORTO
 # ==========================================
 def scale_worker_infrastructure(num_workers):
-    print(f"📈 [ASG] Imposto la capacità desiderata a {num_workers} Worker...")
+    print(f" [ASG] Imposto la capacità desiderata a {num_workers} Worker...")
     asg_client.update_auto_scaling_group(
         AutoScalingGroupName=ASG_NAME, MinSize=0, DesiredCapacity=num_workers, MaxSize=10
     )
@@ -91,7 +93,7 @@ def generate_initial_training_tasks(job_data):
         with open(percorso_strategie, 'r') as f:
             all_strategies = json.load(f)
     except FileNotFoundError:
-        print(f"❌ ERRORE CRITICO: Impossibile trovare il file {percorso_strategie}!")
+        print(f" ERRORE CRITICO: Impossibile trovare il file {percorso_strategie}!")
         all_strategies = {}
 
         # 2. Capiamo se il dataset è classificazione o regressione
@@ -105,11 +107,11 @@ def generate_initial_training_tasks(job_data):
 
     # 4. Rete di sicurezza (Fallback)
     if not lista_strategie_corretta:
-        print(f"⚠️ ATTENZIONE: Nessuna configurazione esatta per {task_type} con {num_workers} worker. Uso il default.")
+        print(f" ATTENZIONE: Nessuna configurazione esatta per {task_type} con {num_workers} worker. Uso il default.")
         lista_strategie_corretta = [{"max_depth": "None", "max_features": "sqrt", "criterion": "gini"}]
     current_skip = 0
 
-    print(f"🔀 [FAN-OUT] Suddivisione {num_trees_total} alberi in {num_workers} task di training...")
+    print(f" [FAN-OUT] Suddivisione {num_trees_total} alberi in {num_workers} task di training...")
     for i in range(num_workers):
         trees = trees_per_worker + (1 if i < trees_remainder else 0)
         n_rows = rows_per_worker + (remainder_rows if i == num_workers - 1 else 0)
@@ -182,10 +184,10 @@ def generate_inference_tasks(job_id, train_resp, dataset):
         "task_id": task_id,
         "dataset": dataset,
         "test_dataset_uri": test_s3_uri,
-        "model_s3_uri": model_s3_uri  # Il modello appena creato!
+        "model_s3_uri": model_s3_uri  
     }
     sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
-    print(f"   ⚡ [INFERENZA DISPACCIATA] Task {task_id} inviato alla coda di inferenza!")
+    print(f" [INFERENZA DISPACCIATA] Task {task_id} inviato alla coda di inferenza!")
 
 
 def parse_s3_uri(s3_uri):
@@ -193,17 +195,79 @@ def parse_s3_uri(s3_uri):
     return parts[0], parts[1]
 
 
-def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
+# SALVATAGGIO METRICHE SU S3
+def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
+    s3_client = boto3.client('s3', region_name=AWS_REGION)
+    target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
+    
+    # Percorso dinamico del file CSV dei risultati su S3
+    s3_key = f"results/{dataset}/{dataset}_results.csv"
+    
+    # Creiamo il dataframe con la nuova riga di risultati
+    new_row_df = pd.DataFrame([{
+        'Dataset': dataset, 
+        'Workers': n_workers, 
+        'Trees': n_trees, 
+        'Strategy': strategy_name, 
+        'Train_Time': round(train_time, 2), 
+        'Infer_Time': round(inf_time, 2), 
+        'Metrics': str(metrics_dict)
+    }])
+
+    try:
+        # Tenta di scaricare il CSV esistente da S3
+        obj = s3_client.get_object(Bucket=target_bucket, Key=s3_key)
+        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()))
+        # Se esiste, accoda la nuova riga (APPEND continuo)
+        df_final = pd.concat([df_existing, new_row_df], ignore_index=True)
+        
+    except botocore.exceptions.ClientError as e:
+        # Se il file non esiste (errore 404 NoSuchKey), il file finale sarà solo la nuova riga
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            df_final = new_row_df
+        else:
+            print(f"!! Errore imprevisto di S3 durante il salvataggio: {e}")
+            return
+            
+    # Salva il file aggiornato sovrascrivendolo su S3
+    csv_buffer = io.StringIO()
+    df_final.to_csv(csv_buffer, index=False)
+    s3_client.put_object(Bucket=target_bucket, Key=s3_key, Body=csv_buffer.getvalue())
+    print(f" [METRICHE] Risultati accodati permanentemente in: s3://{target_bucket}/{s3_key}")
+
+def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, trees, train_time, infer_time):
     print("\n" + "=" * 50)
-    print("📊 FASE DI AGGREGAZIONE E VALUTAZIONE FINALE")
+    print(" FASE DI AGGREGAZIONE E VALUTAZIONE FINALE")
     print("=" * 50)
+
+    ml_handler = ModelFactory.get_model(dataset_name)
+    task_type = getattr(ml_handler, 'task_type', 'classification')
+
+    # Creiamo il dizionario delle metriche
+    if task_type == 'classification':
+        metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
+    else:
+        metrics_dict = {'RMSE': round(rmse, 4), 'R2 Score': round(r2, 4)}
+
+    # Richiamiamo il salvataggio su S3
+    config = load_config()
+    save_metrics(
+        dataset=dataset_name, 
+        n_workers=num_workers, 
+        n_trees=trees, 
+        strategy_name="SQS_Async", 
+        train_time=train_time, 
+        inf_time=infer_time, 
+        metrics_dict=metrics_dict, 
+        config=config
+    )
 
     s3 = boto3.client('s3')
     config = load_config()
 
     # 1. SCARICA TUTTI I FILE .NPY DAI WORKER
     voti_list = []
-    print(f"📥 Scaricamento di {len(risultati_inferenza_s3)} file di risultati da S3...")
+    print(f" Scaricamento di {len(risultati_inferenza_s3)} file di risultati da S3...")
 
     for task_id, s3_uri in risultati_inferenza_s3.items():
         bucket, key = parse_s3_uri(s3_uri)
@@ -223,7 +287,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
     test_s3_key = config['paths'][dataset_name]['test']
     test_s3_uri = f"s3://{config.get('s3_bucket')}/{test_s3_key}"
 
-    print(f"🎯 Lettura dei valori reali (Ground Truth) dalla colonna '{target_col}'...")
+    print(f" Lettura dei valori reali (Ground Truth) dalla colonna '{target_col}'...")
     # Leggiamo SOLO la colonna target per non saturare la RAM del Master
     df_test = pd.read_csv(test_s3_uri, usecols=[target_col])
     y_true = df_test[target_col].values
@@ -235,7 +299,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
         # ---------------------------------------------------------
         # CLASSIFICAZIONE (La shape è N_righe x 2_colonne)
         # ---------------------------------------------------------
-        print("🧮 Rilevato task di Classificazione. Eseguo il conteggio dei voti...")
+        print(" Rilevato task di Classificazione. Eseguo il conteggio dei voti...")
 
         # Sommiamo tutte le matrici. Se abbiamo 4 worker, sommiamo i voti di tutti!
         # Risultato: matrice N x 2 con il totale dei voti globali per riga.
@@ -253,7 +317,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
         auc = roc_auc_score(y_true, y_prob)
         acc = accuracy_score(y_true, y_pred_class)
 
-        print(f"\n🏆 RISULTATI GLOBALI (Random Forest Distribuita):")
+        print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
         print(f"   -> ROC-AUC:   {auc:.4f}")
         print(f"   -> Accuracy:  {acc:.4f}")
 
@@ -261,7 +325,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
         # ---------------------------------------------------------
         # REGRESSIONE (La shape è N_righe array 1D)
         # ---------------------------------------------------------
-        print("📈 Rilevato task di Regressione. Calcolo la media globale...")
+        print(" Rilevato task di Regressione. Calcolo la media globale...")
 
         # Per la regressione, la previsione finale della foresta è la media
         # delle previsioni di tutti gli alberi (e quindi la media delle medie dei worker).
@@ -272,18 +336,38 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3):
         rmse = np.sqrt(mse)
         r2 = r2_score(y_true, y_pred)
 
-        print(f"\n🏆 RISULTATI GLOBALI (Random Forest Distribuita):")
-        print(f"   -> RMSE:      {rmse:.4f}")
-        print(f"   -> R2 Score:  {r2:.4f}")
+        print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
+        print(f" -> RMSE:      {rmse:.4f}")
+        print(f" -> R2 Score:  {r2:.4f}")
 
     print("=" * 50 + "\n")
 
+
+def get_job_state(job_id):
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+    table = dynamodb.Table('JobStatus')
+    try:
+        response = table.get_item(Key={'job_id': job_id})
+        if 'Item' in response:
+            return set(response['Item'].get('completed_train', [])), response['Item'].get('completed_infer', {})
+    except Exception:
+        pass
+    return set(), {} # Se non esiste, il job è nuovo
+
+def update_job_state(job_id, completed_train_set, completed_infer_dict):
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+    table = dynamodb.Table('JobStatus')
+    table.put_item(Item={
+        'job_id': job_id,
+        'completed_train': list(completed_train_set), # Dynamo non accetta i Set di Python direttamente
+        'completed_infer': completed_infer_dict
+    })
 
 # ==========================================
 # CICLO PRINCIPALE DEL MASTER (EVENT LOOP REATTIVO)
 # ==========================================
 def main():
-    print("🚀 Master Node Avviato. In attesa del Client...")
+    print(" Master Node Avviato. In attesa del Client...")
 
     while True:
         # 1. Attesa del comando dal Client
@@ -301,47 +385,57 @@ def main():
             num_workers = job_data['num_workers']
 
             print(f"\n" + "=" * 50)
-            print(f"🎬 INIZIO PIPELINE ASINCRONA PER JOB: {job_id}")
+            print(f" INIZIO PIPELINE ASINCRONA PER JOB: {job_id}")
             print("=" * 50)
+
+            # Timers
+            start_totale = time.time() 
+            start_train = time.time()
+            tempo_training = 0
+            tempo_inferenza = 0
 
             # 2. Accendi le macchine
             scale_worker_infrastructure(num_workers)
 
-            # 3. Genera tutti i task di Training
-            generate_initial_training_tasks(job_data)
-
-            # --- STATO DELLA PIPELINE ---
-            train_completati = set()  # Tiene traccia di chi ha finito il training
-            risultati_inferenza_s3 = {}  # task_id -> s3_uri del file .npy
+            # --- STATO DELLA PIPELINE (RECUPERATO DA DYNAMODB!) ---
+            # Invece di inizializzarli vuoti, chiediamo a Dynamo se avevamo già iniziato
+            train_completati, risultati_inferenza_s3 = get_job_state(job_id)
+            
+            # Genera i task SOLO se non ci sono task già completati (per evitare duplicati in coda)
+            if len(train_completati) == 0:
+                generate_initial_training_tasks(job_data)
+            else:
+                print(f"🔄 [RECOVERY] Trovati {len(train_completati)} task di training già completati su DynamoDB!")
 
             print("\n🔄 [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
 
-            # 4. IL CUORE DELL'ASINCRONIA: Ciclo finché non finiscono tutte le INFERENZE
             while len(risultati_inferenza_s3) < num_workers:
 
                 # --- ASCOLTO RISPOSTE TRAINING ---
-                # Usiamo un WaitTime breve (es. 2 secondi) per non bloccare troppo il loop
-                res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10,
-                                                       WaitTimeSeconds=2)
+                res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
                 if 'Messages' in res_train:
                     for msg in res_train['Messages']:
                         train_resp = json.loads(msg['Body'])
                         task_id = train_resp['task_id']
 
-
                         if task_id not in train_completati:
                             train_completati.add(task_id)
                             print(f"   ✅ [TRAIN FATTO] {task_id} ha finito l'addestramento.")
+                            
+                            # --- SALVA STATO SU DYNAMO ---
+                            update_job_state(job_id, train_completati, risultati_inferenza_s3)
+                            
                             generate_inference_tasks(job_id, train_resp, dataset)
 
-                        ##salva stato e poi cancella, DA IMPLEMENTARE
-                        ########################################################################
-                        # Cancello il messaggio di risposta training
                         sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                
+                # Check se il training è finito proprio ora per bloccare il timer
+                if len(train_completati) == num_workers and tempo_training == 0:
+                    tempo_training = time.time() - start_train
+                    start_infer = time.time() # Inizia il timer dell'inferenza
 
                 # --- ASCOLTO RISPOSTE INFERENZA ---
-                res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10,
-                                                       WaitTimeSeconds=2)
+                res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
                 if 'Messages' in res_infer:
                     for msg in res_infer['Messages']:
                         body = json.loads(msg['Body'])
@@ -350,35 +444,33 @@ def main():
 
                         if task_id not in risultati_inferenza_s3:
                             risultati_inferenza_s3[task_id] = voti_s3_uri
-                            print(
-                                f"   🔮 [INFERENZA FATTA] {task_id} ha completato le previsioni! ({len(risultati_inferenza_s3)}/{num_workers})")
+                            print(f"   🔮 [INFERENZA FATTA] {task_id} ha completato le previsioni! ({len(risultati_inferenza_s3)}/{num_workers})")
+                            
+                            # --- SALVA STATO SU DYNAMO ---
+                            update_job_state(job_id, train_completati, risultati_inferenza_s3)
 
-                        # Cancello il messaggio di risposta inferenza
                         sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
 
-            # 5. USCITI DAL LOOP: Tutti hanno finito sia Training che Inferenza!
+            # Fine del Loop
+            if tempo_inferenza == 0:
+                tempo_inferenza = time.time() - start_infer
+
             print("\n🎉 Tutti i Worker hanno completato la pipeline end-to-end!")
-
-
-
-
-
-            # 6. SCALE-TO-ZERO IMMEDIATO (per smettere di pagare mentre calcoliamo la metrica)
             scale_worker_infrastructure(0)
 
-            # 7. AGGREGAZIONE FINALE E CALCOLO METRICHE
             print("📊 Calcolo delle metriche finali in corso (ROC-AUC e Accuracy)...")
+            
+            tempo_totale = time.time() - start_totale
 
             try:
-                aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3)
+                # Passa anche i timer alla funzione di aggregazione!
+                aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], tempo_training, tempo_inferenza)
             except Exception as e:
                 print(f"❌ Errore durante l'aggregazione finale: {e}")
 
-
-            # 8. PULIZIA
             sqs_client.delete_message(QueueUrl=CLIENT_QUEUE_URL, ReceiptHandle=client_msg['ReceiptHandle'])
+            print(f"⏱️ TEMPI -> Train: {tempo_training:.2f}s | Infer: {tempo_inferenza:.2f}s | Totale Sistema: {tempo_totale:.2f}s")
             print(f"🏁 JOB {job_id} COMPLETATO E CHIUSO.\n")
-
 
 if __name__ == "__main__":
     main()
