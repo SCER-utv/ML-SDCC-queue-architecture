@@ -230,8 +230,8 @@ def main():
 
                 # CANCELLA IL MESSAGGIO SOLO DOPO IL SUCCESSO
                 sqs_client.delete_message(QueueUrl=INFER_TASK_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
-                print(f" Inferenza {train_task_data['task_id']} completata con successo!\n")
-
+                print(f" Inferenza {infer_task_data['task_id']} completata con successo!\n")
+                
                 continue  # Ricomincia il ciclo
 
             # ==========================================
