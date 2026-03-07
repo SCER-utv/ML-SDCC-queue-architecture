@@ -7,7 +7,7 @@ import io
 import botocore
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score
+from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error
 
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
@@ -262,25 +262,6 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
     ml_handler = ModelFactory.get_model(dataset_name)
     task_type = getattr(ml_handler, 'task_type', 'classification')
 
-    # Creiamo il dizionario delle metriche
-    if task_type == 'classification':
-        metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
-    else:
-        metrics_dict = {'RMSE': round(rmse, 4), 'R2 Score': round(r2, 4)}
-
-    # Richiamiamo il salvataggio su S3
-    config = load_config()
-    save_metrics(
-        dataset=dataset_name, 
-        n_workers=num_workers, 
-        n_trees=trees, 
-        strategy_name="SQS_Async", 
-        train_time=train_time, 
-        inf_time=infer_time, 
-        metrics_dict=metrics_dict, 
-        config=config
-    )
-
     s3 = boto3.client('s3')
     config = load_config()
 
@@ -299,19 +280,15 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
         os.remove(local_path)
 
     # 2. SCARICA LA GROUND TRUTH (I valori reali dal test set)
-    # Usiamo la Factory per sapere qual è la colonna target!
-    ml_handler = ModelFactory.get_model(dataset_name)
     target_col = ml_handler.target_column
-
     test_s3_key = config['paths'][dataset_name]['test']
     test_s3_uri = f"s3://{config.get('s3_bucket')}/{test_s3_key}"
 
     print(f" Lettura dei valori reali (Ground Truth) dalla colonna '{target_col}'...")
-    # Leggiamo SOLO la colonna target per non saturare la RAM del Master
     df_test = pd.read_csv(test_s3_uri, usecols=[target_col])
     y_true = df_test[target_col].values
 
-    # 3. LA MAGIA DELL'AGGREGAZIONE (Riconoscimento automatico del task)
+    # 3. LA MAGIA DELL'AGGREGAZIONE
     forma_dati = voti_list[0].shape
 
     if len(forma_dati) == 2:
@@ -320,25 +297,21 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
         # ---------------------------------------------------------
         print(" Rilevato task di Classificazione. Eseguo il conteggio dei voti...")
 
-        # Sommiamo tutte le matrici. Se abbiamo 4 worker, sommiamo i voti di tutti!
-        # Risultato: matrice N x 2 con il totale dei voti globali per riga.
         totale_voti = np.sum(voti_list, axis=0)
-
-        # La probabilità della classe 1 è data dalla formula: $Prob(1) = \frac{Voti_1}{Voti_0 + Voti_1}$
         voti_0 = totale_voti[:, 0]
         voti_1 = totale_voti[:, 1]
         y_prob = voti_1 / (voti_0 + voti_1)
-
-        # La classe secca è l'indice della colonna col valore massimo (0 o 1)
         y_pred_class = np.argmax(totale_voti, axis=1)
 
-        # Metriche
         auc = roc_auc_score(y_true, y_prob)
         acc = accuracy_score(y_true, y_pred_class)
 
         print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
         print(f"   -> ROC-AUC:   {auc:.4f}")
         print(f"   -> Accuracy:  {acc:.4f}")
+        
+        # Dizionario metriche da salvare
+        metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
 
     else:
         # ---------------------------------------------------------
@@ -346,20 +319,34 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
         # ---------------------------------------------------------
         print(" Rilevato task di Regressione. Calcolo la media globale...")
 
-        # Per la regressione, la previsione finale della foresta è la media
-        # delle previsioni di tutti gli alberi (e quindi la media delle medie dei worker).
         y_pred = np.mean(voti_list, axis=0)
 
-        # Metriche
         mse = mean_squared_error(y_true, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_true, y_pred)
+        mae = mean_absolute_error(y_true, y_pred) # <--- NUOVO CALCOLO MAE
 
         print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
         print(f" -> RMSE:      {rmse:.4f}")
+        print(f" -> MAE:       {mae:.4f}") # <--- NUOVA STAMPA MAE
         print(f" -> R2 Score:  {r2:.4f}")
+        
+        # Dizionario metriche da salvare con MAE aggiunto
+        metrics_dict = {'RMSE': round(rmse, 4), 'MAE': round(mae, 4), 'R2 Score': round(r2, 4)}
 
     print("=" * 50 + "\n")
+
+    # 4. SALVATAGGIO FINALE SU S3 (Spostato qui in fondo, quando le metriche esistono!)
+    save_metrics(
+        dataset=dataset_name, 
+        n_workers=num_workers, 
+        n_trees=trees, 
+        strategy_name="SQS_Async", 
+        train_time=train_time, 
+        inf_time=infer_time, 
+        metrics_dict=metrics_dict, 
+        config=config
+    )
 
 
 def get_job_state(job_id):
