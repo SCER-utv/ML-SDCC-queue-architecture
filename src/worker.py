@@ -25,7 +25,6 @@ sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 
 
-
 # Thread in background che allunga la vita del messaggio ogni 2 minuti
 def extend_sqs_visibility(queue_url, receipt_handle, stop_event):
     
