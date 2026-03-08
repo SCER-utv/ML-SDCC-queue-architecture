@@ -56,6 +56,45 @@ def scale_worker_infrastructure(num_workers):
     asg_client.update_auto_scaling_group(
         AutoScalingGroupName=ASG_NAME, MinSize=0, DesiredCapacity=num_workers, MaxSize=10
     )
+    
+    # Se stiamo spegnendo le macchine (num_workers == 0), usciamo.
+    if num_workers == 0:
+        return
+        
+    print(f" [ASG] Attendo l'avvio delle istanze per rinominarle (DRF-worker1, DRF-worker2...)...")
+    ec2_client = boto3.client('ec2', region_name=AWS_REGION)
+    
+    # Aspettiamo finché AWS non ha effettivamente creato le istanze (Polling)
+    max_attesa = 24 # 24 * 5 sec = 2 minuti massimi di attesa
+    for _ in range(max_attesa):
+        time.sleep(5)
+        # Cerchiamo le istanze che appartengono al nostro Auto Scaling Group
+        # e che non siano nello stato 'terminated' o 'shutting-down'
+        risposta = ec2_client.describe_instances(
+            Filters=[
+                {'Name': 'tag:aws:autoscaling:groupName', 'Values': [ASG_NAME]},
+                {'Name': 'instance-state-name', 'Values': ['pending', 'running']}
+            ]
+        )
+        
+        istanze_trovate = []
+        for reservation in risposta.get('Reservations', []):
+            for inst in reservation.get('Instances', []):
+                istanze_trovate.append(inst['InstanceId'])
+                
+        # Se l'ASG ha partorito tutte le macchine richieste, procediamo col rinominarle
+        if len(istanze_trovate) == num_workers:
+            print(f" Trovate {len(istanze_trovate)} istanze. Applicazione dei nomi in corso...")
+            
+            # Rinominiamo le istanze con un ciclo for
+            for i, instance_id in enumerate(istanze_trovate):
+                nome_worker = f"DRF-worker{i+1}"
+                ec2_client.create_tags(
+                    Resources=[instance_id],
+                    Tags=[{'Key': 'Name', 'Value': nome_worker}]
+                )
+            print(" Nomi applicati con successo su EC2!")
+            break
 
 
 # [NUOVO METODO ZERO-COPY] Interroga S3 senza scaricare il file
