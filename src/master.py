@@ -34,6 +34,13 @@ asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
 # FUNZIONI DI SUPPORTO
 # ==========================================
 
+def conta_parti_modello(bucket, dataset, target_model):
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    prefix = f"models/{dataset}/{target_model}/"
+    resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    # Ritorna la lista degli URI completi dei file .joblib
+    return [f"s3://{bucket}/{obj['Key']}" for obj in resp.get('Contents', []) if obj['Key'].endswith('.joblib')]
+    
 # Thread in background che allunga la vita del messaggio del Client
 def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
     
