@@ -133,7 +133,7 @@ def esegui_inferenza(infer_task_data, receipt_handle):
     heartbeat_thread.start()
     # ------------------------
 
-try:
+    try:
         bucket, model_key = parse_s3_uri(model_s3_uri)
         local_model_path = f"/tmp/model_{task_id}.joblib"
         s3_client.download_file(bucket, model_key, local_model_path)
