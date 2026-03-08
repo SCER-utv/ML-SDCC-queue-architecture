@@ -37,7 +37,7 @@ def main():
         )
         print(f" Richiesta inviata con successo!")
         print(f" Job ID: {job_id}")
-        print(f" Dataset: {args.dataset} | 🖥️ Workers: {args.workers} | 🌲 Alberi: {args.trees}")
+        print(f" Dataset: {args.dataset} | Workers: {args.workers} | Alberi: {args.trees}")
     except Exception as e:
         print(f" Errore nell'invio: {e}")
 
