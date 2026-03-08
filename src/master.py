@@ -586,3 +586,6 @@ def main():
                 
             sqs_client.delete_message(QueueUrl=CLIENT_QUEUE_URL, ReceiptHandle=receipt_handle)
             print(f" JOB {job_id} COMPLETATO E CHIUSO.\n")
+
+if __name__ == "__main__":
+    main()
