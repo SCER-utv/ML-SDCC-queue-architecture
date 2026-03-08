@@ -133,41 +133,43 @@ def esegui_inferenza(infer_task_data, receipt_handle):
     heartbeat_thread.start()
     # ------------------------
 
-    try:
-        print(f" [INFER] Avvio inferenza {task_id}. Scaricamento modello e test set...")
+try:
         bucket, model_key = parse_s3_uri(model_s3_uri)
-
-        # 1. SCARICA IL MODELLO DA S3
-        local_model_path = f"/tmp/model_{job_id}_{task_id}.joblib"
+        local_model_path = f"/tmp/model_{task_id}.joblib"
         s3_client.download_file(bucket, model_key, local_model_path)
         rf = joblib.load(local_model_path)
-
-        ml_handler = ModelFactory.get_model(dataset_name=infer_task_data['dataset'])
-
-        # 2. SCARICA L'INTERO TEST SET
-        df_test = pd.read_csv(test_dataset_uri)
-        print(f" -> Calcolo previsioni in corso (Delegate alla Factory)...")
-        start_time = time.time()
-
-        # Ritornerà una matrice a 2 colonne (Classificazione) o un array 1D (Regressione)
-        risultati_numpy = ml_handler.process_and_predict(rf, df_test)
-
-        print(f" -> Previsioni completate in {time.time() - start_time:.2f} secondi.")
-
-        # 4. SALVATAGGIO IN .NPY COMPRESSO E UPLOAD (Meglio del CSV!)
-        local_npy_path = f"/tmp/results_{job_id}_{task_id}.npy"
-        np.save(local_npy_path, risultati_numpy)
-
-        dataset_name = infer_task_data['dataset']
-        s3_voti_key = f"results/{dataset_name}/{job_id}/task_{task_id}.npy"
-        s3_client.upload_file(local_npy_path, bucket, s3_voti_key)
-
         os.remove(local_model_path)
-        os.remove(local_npy_path)
-        return f"s3://{bucket}/{s3_voti_key}"
+
+        # CASO 1: INFERENZA SU SINGOLA TUPLA (Real-time)
+        if 'tuple_data' in infer_task_data:
+            print(f" [INFER] Predizione su singola tupla in corso...")
+            # Formattiamo i dati per sklearn (1 riga, N colonne)
+            dati = np.array(infer_task_data['tuple_data']).reshape(1, -1)
+            
+            # Usiamo direttamente la predizione del modello scikit-learn
+            predizione_locale = rf.predict(dati)[0] 
+            
+            # Non salviamo nulla su S3, ritorniamo il valore testuale!
+            return {"tipo": "singolo", "valore": float(predizione_locale)}
+
+        # CASO 2: INFERENZA BULK DA S3 (Test set per metriche)
+        else:
+            print(f" [INFER] Inferenza su Dataset Intero in corso...")
+            test_dataset_uri = infer_task_data['test_dataset_uri']
+            df_test = pd.read_csv(test_dataset_uri)
+            
+            ml_handler = ModelFactory.get_model(dataset_name=infer_task_data['dataset'])
+            risultati_numpy = ml_handler.process_and_predict(rf, df_test)
+
+            local_npy_path = f"/tmp/res_{task_id}.npy"
+            np.save(local_npy_path, risultati_numpy)
+            s3_voti_key = f"results/{infer_task_data['dataset']}/{job_id}/task_{task_id}.npy"
+            s3_client.upload_file(local_npy_path, bucket, s3_voti_key)
+            os.remove(local_npy_path)
+            
+            return {"tipo": "bulk", "valore": f"s3://{bucket}/{s3_voti_key}"}
 
     finally:
-        # --- FINE HEARTBEAT ---
         stop_event.set()
         heartbeat_thread.join()
 
