@@ -2,7 +2,7 @@ import boto3
 import json
 import argparse
 import uuid
-import time
+from datetime import datetime
 
 # Usa la tua coda FIFO
 CLIENT_QUEUE_URL = 'https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo'
@@ -18,8 +18,11 @@ def main():
 
     sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 
-    # Creiamo un job_id univoco e parlante già qui dal client!
-    job_id = f"job_{args.dataset}_{int(time.time())}"
+    # Genera una data leggibile tipo "20240308_153022"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Crea l'ID perfetto: es. "job_taxi_200trees_20240308_153022"
+    job_id = f"job_{args.dataset}_{args.trees}trees_{timestamp}"
 
     message_body = {
         "job_id": job_id, # Lo passiamo direttamente noi!
