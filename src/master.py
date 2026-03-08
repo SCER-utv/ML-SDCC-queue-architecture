@@ -439,7 +439,7 @@ def main():
             job_data['job_id'] = job_id
             dataset = job_data['dataset']
 
-            num_workers = job_data['num_workers']
+            mode = job_data.get('mode', 'train')
 
             print(f"\n" + "=" * 50)
             print(f" INIZIO PIPELINE ASINCRONA PER JOB: {job_id}")
