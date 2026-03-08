@@ -99,7 +99,8 @@ def train(train_task_data, receipt_handle):
         joblib.dump(rf, local_model_path)
 
         bucket, _ = parse_s3_uri(dataset_uri)
-        s3_key = f"models/{job_id}/task_{task_id}.joblib"
+        dataset_name = train_task_data['dataset']
+        s3_key = f"models/{dataset_name}/{job_id}/task_{task_id}.joblib"
 
         print("   -> Upload del modello su S3 in corso...")
         s3_client.upload_file(local_model_path, bucket, s3_key)
@@ -157,7 +158,8 @@ def esegui_inferenza(infer_task_data, receipt_handle):
         local_npy_path = f"/tmp/results_{job_id}_{task_id}.npy"
         np.save(local_npy_path, risultati_numpy)
 
-        s3_voti_key = f"results/{job_id}/{task_id}.npy"
+        dataset_name = infer_task_data['dataset']
+        s3_voti_key = f"results/{dataset_name}/{job_id}/task_{task_id}.npy"
         s3_client.upload_file(local_npy_path, bucket, s3_voti_key)
 
         os.remove(local_model_path)
