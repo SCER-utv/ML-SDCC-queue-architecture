@@ -421,6 +421,9 @@ def main():
 
         if 'Messages' in response:
             client_msg = response['Messages'][0]
+
+            receipt_handle = client_msg['ReceiptHandle']
+            
             job_data = json.loads(client_msg['Body'])
 
             # Estraiamo il Job ID parlante creato dal Client (es. job_taxi_200trees_...)
