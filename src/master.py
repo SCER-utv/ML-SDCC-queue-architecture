@@ -455,94 +455,134 @@ def main():
             # -----------------------------------
 
             try:
-                # Timers
-                start_totale = time.time() 
-                start_train = time.time()
-                tempo_training = 0
-                tempo_inferenza = 0
-    
-                # 2. Accendi le macchine
-                scale_worker_infrastructure(num_workers)
-    
-                # --- STATO DELLA PIPELINE (RECUPERATO DA DYNAMODB!) ---
-                # Invece di inizializzarli vuoti, chiediamo a Dynamo se avevamo già iniziato
-                train_completati, risultati_inferenza_s3 = get_job_state(job_id)
-                
-                # Genera i task SOLO se non ci sono task già completati (per evitare duplicati in coda)
-                if len(train_completati) == 0:
-                    generate_initial_training_tasks(job_data)
-                else:
-                    print(f" [RECOVERY] Trovati {len(train_completati)} task di training già completati su DynamoDB!")
-    
-                print("\n [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
-    
-                while len(risultati_inferenza_s3) < num_workers:
-    
-                    # --- ASCOLTO RISPOSTE TRAINING ---
-                    res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
-                    if 'Messages' in res_train:
-                        for msg in res_train['Messages']:
-                            train_resp = json.loads(msg['Body'])
-                            task_id = train_resp['task_id']
-    
-                            if task_id not in train_completati:
-                                train_completati.add(task_id)
-                                print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
-                                
-                                # --- SALVA STATO SU DYNAMO ---
-                                update_job_state(job_id, train_completati, risultati_inferenza_s3)
-                                
-                                generate_inference_tasks(job_id, train_resp, dataset)
-    
-                            sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                # RAMO A: TRAINING + TEST BULK
+                if mode == 'train':
+                    num_workers = job_data['num_workers']
+                    start_totale = time.time() 
+                    start_train = time.time()
+                    tempo_training = 0
+                    tempo_inferenza = 0
+        
+                    scale_worker_infrastructure(num_workers)
+        
+                    # STATO DELLA PIPELINE SU DYNAMODB
+                    train_completati, risultati_inferenza_s3 = get_job_state(job_id)
                     
-                    # Check se il training è finito proprio ora per bloccare il timer
-                    if len(train_completati) == num_workers and tempo_training == 0:
-                        tempo_training = time.time() - start_train
-                        start_infer = time.time() # Inizia il timer dell'inferenza
-    
-                    # --- ASCOLTO RISPOSTE INFERENZA ---
-                    res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
-                    if 'Messages' in res_infer:
-                        for msg in res_infer['Messages']:
-                            body = json.loads(msg['Body'])
-                            task_id = body['task_id']
-                            voti_s3_uri = body['s3_voti_uri']
-    
-                            if task_id not in risultati_inferenza_s3:
-                                risultati_inferenza_s3[task_id] = voti_s3_uri
-                                print(f" [INFERENZA FATTA] {task_id} ha completato le previsioni! ({len(risultati_inferenza_s3)}/{num_workers})")
+                    if len(train_completati) == 0:
+                        generate_initial_training_tasks(job_data)
+                    else:
+                        print(f" [RECOVERY] Trovati {len(train_completati)} task di training già completati su DynamoDB!")
+        
+                    print("\n [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
+        
+                    while len(risultati_inferenza_s3) < num_workers:
+                        # --- ASCOLTO TRAINING ---
+                        res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
+                        if 'Messages' in res_train:
+                            for msg in res_train['Messages']:
+                                train_resp = json.loads(msg['Body'])
+                                task_id = train_resp['task_id']
+        
+                                if task_id not in train_completati:
+                                    train_completati.add(task_id)
+                                    print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3)
+                                    generate_inference_tasks(job_id, train_resp, dataset)
+        
+                                sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                        
+                        if len(train_completati) == num_workers and tempo_training == 0:
+                            tempo_training = time.time() - start_train
+                            start_infer = time.time() 
+        
+                        # --- ASCOLTO INFERENZA ---
+                        res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
+                        if 'Messages' in res_infer:
+                            for msg in res_infer['Messages']:
+                                body = json.loads(msg['Body'])
+                                task_id = body['task_id']
+                                voti_s3_uri = body['s3_voti_uri'] # Nel bulk è la stringa URI
+        
+                                if task_id not in risultati_inferenza_s3:
+                                    risultati_inferenza_s3[task_id] = voti_s3_uri
+                                    print(f" [INFERENZA FATTA] {task_id} completato! ({len(risultati_inferenza_s3)}/{num_workers})")
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3)
+        
+                                sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+        
+                    if tempo_inferenza == 0:
+                        tempo_inferenza = time.time() - start_infer
+        
+                    print("\n Tutti i Worker hanno completato la pipeline end-to-end!")
+                    scale_worker_infrastructure(0)
+                    print(" Calcolo delle metriche finali in corso...")
+                    tempo_totale = time.time() - start_totale
+        
+                    try:
+                        aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], tempo_training, tempo_inferenza)
+                    except Exception as e:
+                        print(f" Errore durante l'aggregazione finale: {e}")
+                        
+                    print(f" TEMPI -> Train: {tempo_training:.2f}s | Infer: {tempo_inferenza:.2f}s | Totale Sistema: {tempo_totale:.2f}s")
+
+
+                # RAMO B: INFERENZA REAL-TIME SINGOLA
+                elif mode == 'infer':
+                    start_totale = time.time()
+                    target_model = job_data['target_model']
+                    tuple_data = job_data['tuple_data']
+                    
+                    bucket = load_config().get("s3_bucket")
+                    modelli_s3_uris = conta_parti_modello(bucket, dataset, target_model)
+                    num_workers = len(modelli_s3_uris)
+                    
+                    print(f"📦 Modello '{target_model}' diviso in {num_workers} parti. Avvio Worker...")
+                    scale_worker_infrastructure(num_workers)
+                    
+                    for i, uri in enumerate(modelli_s3_uris):
+                        task_id = f"task_infer_rt_{i+1}"
+                        infer_task = {
+                            "job_id": job_id, "task_id": task_id, "dataset": dataset,
+                            "model_s3_uri": uri, "tuple_data": tuple_data
+                        }
+                        sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
+                        
+                    voti_ricevuti = []
+                    while len(voti_ricevuti) < num_workers:
+                        res = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, WaitTimeSeconds=2)
+                        if 'Messages' in res:
+                            for msg in res['Messages']:
+                                body = json.loads(msg['Body'])
+                                res_dati = body['s3_voti_uri'] 
                                 
-                                # --- SALVA STATO SU DYNAMO ---
-                                update_job_state(job_id, train_completati, risultati_inferenza_s3)
-    
-                            sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
-    
-                # Fine del Loop
-                if tempo_inferenza == 0:
-                    tempo_inferenza = time.time() - start_infer
-    
-                print("\n Tutti i Worker hanno completato la pipeline end-to-end!")
-                scale_worker_infrastructure(0)
-    
-                print(" Calcolo delle metriche finali in corso (ROC-AUC e Accuracy)...")
-                
-                tempo_totale = time.time() - start_totale
-    
-                try:
-                    # Passa anche i timer alla funzione di aggregazione!
-                    aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], tempo_training, tempo_inferenza)
-                except Exception as e:
-                    print(f" Errore durante l'aggregazione finale: {e}")
+                                # Verifica che sia la risposta strutturata real-time (dict) e non il bulk (stringa)
+                                if isinstance(res_dati, dict) and res_dati.get("tipo") == "singolo":
+                                    voti_ricevuti.append(res_dati['valore'])
+                                    print(f"   -> Ricevuta predizione locale da un worker: {res_dati['valore']}")
+                                    
+                                sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                                
+                    scale_worker_infrastructure(0)
+                    
+                    # Consenso distribuito (Aggregation)
+                    ml_handler = ModelFactory.get_model(dataset)
+                    if ml_handler.task_type == 'classification':
+                        predizione_finale = max(set(voti_ricevuti), key=voti_ricevuti.count) # Moda / Maggioranza
+                        tipo_task = "Classificazione (Voto Maggioranza)"
+                    else:
+                        predizione_finale = sum(voti_ricevuti) / len(voti_ricevuti) # Media
+                        tipo_task = "Regressione (Media)"
+                        
+                    tempo_totale = time.time() - start_totale
+                    print("\n" + "=" * 60)
+                    print(f" RISULTATO FINALE INFERENZA ({tipo_task}): {predizione_finale}")
+                    print(f" Tempo di latenza sistema: {tempo_totale:.2f}s")
+                    print("=" * 60 + "\n")
 
             finally:
                 # --- FINE HEARTBEAT DEL MASTER ---
                 stop_event_master.set()
                 heartbeat_thread_master.join()
                 
-            sqs_client.delete_message(QueueUrl=CLIENT_QUEUE_URL, ReceiptHandle=client_msg['ReceiptHandle'])
-            print(f" TEMPI -> Train: {tempo_training:.2f}s | Infer: {tempo_inferenza:.2f}s | Totale Sistema: {tempo_totale:.2f}s")
+            sqs_client.delete_message(QueueUrl=CLIENT_QUEUE_URL, ReceiptHandle=receipt_handle)
             print(f" JOB {job_id} COMPLETATO E CHIUSO.\n")
-
-if __name__ == "__main__":
-    main()
