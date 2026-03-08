@@ -422,8 +422,9 @@ def main():
             client_msg = response['Messages'][0]
             job_data = json.loads(client_msg['Body'])
 
-            # Usiamo l'ID del messaggio SQS come Job ID!
-            job_id = client_msg['MessageId']
+            # Estraiamo il Job ID parlante creato dal Client (es. job_taxi_200trees_...)
+            # Usiamo l'ID di SQS solo come "piano B" se per qualche motivo manca nel JSON
+            job_id = job_data.get('job_id', client_msg['MessageId'])
             job_data['job_id'] = job_id
             dataset = job_data['dataset']
 
