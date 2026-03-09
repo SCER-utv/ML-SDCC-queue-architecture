@@ -15,7 +15,7 @@
     "higgs": {
       "train": "data/processed/higgs/higgs_train.csv",
       "test": "data/processed/higgs/higgs_test.csv"
-    }
+    },
     "airlines": {
       "train": "data/processed/airlines/airlines_train.csv",
       "test": "data/processed/airlines/airlines_test.csv"
