@@ -122,7 +122,6 @@ def esegui_inferenza(infer_task_data, receipt_handle):
     job_id = infer_task_data['job_id']
     task_id = infer_task_data['task_id']
     model_s3_uri = infer_task_data['model_s3_uri']
-    test_dataset_uri = infer_task_data['test_dataset_uri']
 
     # --- INIZIO HEARTBEAT ---
     stop_event = threading.Event()
