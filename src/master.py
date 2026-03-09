@@ -501,8 +501,14 @@ def main():
                             for msg in res_infer['Messages']:
                                 body = json.loads(msg['Body'])
                                 task_id = body['task_id']
-                                voti_s3_uri = body['s3_voti_uri'] # Nel bulk è la stringa URI
-        
+                                
+                                # --- FIX: Estraiamo il valore dalla nuova struttura a dizionario! ---
+                                res_dati = body['s3_voti_uri']
+                                if isinstance(res_dati, dict):
+                                    voti_s3_uri = res_dati['valore']
+                                else:
+                                    voti_s3_uri = res_dati  # Fallback di sicurezza
+                                
                                 if task_id not in risultati_inferenza_s3:
                                     risultati_inferenza_s3[task_id] = voti_s3_uri
                                     print(f" [INFERENZA FATTA] {task_id} completato! ({len(risultati_inferenza_s3)}/{num_workers})")
