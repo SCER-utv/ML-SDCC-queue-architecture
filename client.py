@@ -105,9 +105,22 @@ def main():
             print(f"\n Nessun modello trovato per il dataset '{dataset}'. Esegui prima un addestramento!")
             sys.exit(0)
             
-        print("\n=== Modelli Disponibili ===")
+        print("\n=== MODELLI DISPONIBILI ===")
+        # Formattazione "Umana" dei modelli
         for i, m in enumerate(models):
-            print(f"  [{i}] {m}")
+            # Es: "job_taxi_200trees_20240308_153022" -> divide in base agli underscore
+            parts = m.split('_')
+            try:
+                alberi = parts[2].replace('trees', '')
+                data_raw = parts[3]
+                ora_raw = parts[4]
+                data_formattata = f"{data_raw[6:8]}/{data_raw[4:6]}/{data_raw[0:4]}"
+                ora_formattata = f"{ora_raw[0:2]}:{ora_raw[2:4]}:{ora_raw[4:6]}"
+                
+                print(f"  [{i}]  Alberi: {alberi:<4} |  Data: {data_formattata} {ora_formattata}  (ID: {m})")
+            except Exception:
+                # Fallback se il nome della cartella non segue lo standard esatto
+                print(f"  [{i}] {m}")
         
         while True:
             try:
@@ -119,19 +132,33 @@ def main():
             except ValueError:
                 print(" Inserisci un numero.")
 
+        # --- VALIDAZIONE DELLE FEATURE IN INGRESSO ---
+        # Dizionario delle feature attese per ogni dataset (Aggiornalo se i tuoi CSV hanno numeri diversi)
+        feature_attese = {
+            'taxi': 11,
+            'higgs': 28,
+            'airlines': 7 # <---IMPORTANTE: Sostituisci col numero reale del tuo dataset airlines
+        }
+        
+        num_richiesto = feature_attese.get(dataset, 0)
+
         print("\n" + "-"*40)
-        print(" Inserimento Dati")
-        print("Inserisci i valori della riga separati da virgola (es: 1.0, 2.5, 3.1)")
+        print(" Inserimento Dati per Predizione")
+        print(f"ATTENZIONE: Il dataset '{dataset.upper()}' richiede ESATTAMENTE {num_richiesto} parametri!")
+        print("Inserisci i valori separati da virgola (es: 1.0, 2.5, 3.1 ...)")
         
         while True:
-            raw_tuple = input(" Valori: ").strip()
+            raw_tuple = input(f" Inserisci i {num_richiesto} valori: ").strip()
             try:
                 tuple_data = [float(x.strip()) for x in raw_tuple.split(',')]
-                if len(tuple_data) > 0:
+                
+                # Validazione della lunghezza prima di inviare ad AWS!
+                if len(tuple_data) == num_richiesto:
                     break
-                print(" Inserisci almeno un valore.")
+                else:
+                    print(f" ERRORE: Hai inserito {len(tuple_data)} valori, ma il modello ne aspetta {num_richiesto}!")
             except ValueError:
-                print(" Errore di formattazione. Assicurati di usare solo numeri e virgole.")
+                print(" ERRORE di formattazione. Usa solo numeri e il punto per i decimali (es. 10.5).")
 
         req_id = f"req_{dataset}_{int(datetime.now().timestamp())}"
         
@@ -141,7 +168,7 @@ def main():
             "dataset": dataset,
             "target_model": target_model,
             "tuple_data": tuple_data
-        }
+        }}
 
     # ==========================================
     # INVIO MESSAGGIO ALLA CODA
