@@ -41,7 +41,7 @@ def main():
     print("  2) Inferenza Real-Time (Singola Predizione)")
     
     while True:
-        scelta_mode = input("\n👉 Inserisci 1 o 2: ").strip()
+        scelta_mode = input("\n Inserisci 1 o 2: ").strip()
         if scelta_mode in ['1', '2']:
             mode = 'train' if scelta_mode == '1' else 'infer'
             break
@@ -56,7 +56,7 @@ def main():
     
     dataset_map = {'1': 'taxi', '2': 'higgs', '3': 'airlines'}
     while True:
-        scelta_ds = input("\n👉 Inserisci 1, 2 o 3: ").strip()
+        scelta_ds = input("\n Inserisci 1, 2 o 3: ").strip()
         if scelta_ds in dataset_map:
             dataset = dataset_map[scelta_ds]
             break
@@ -73,8 +73,8 @@ def main():
         
         while True:
             try:
-                workers = int(input("👉 Inserisci il numero di Worker (es. 4): "))
-                trees = int(input("👉 Inserisci il numero TOTALE di alberi (es. 100): "))
+                workers = int(input(" Inserisci il numero di Worker (es. 4): "))
+                trees = int(input(" Inserisci il numero TOTALE di alberi (es. 100): "))
                 if workers > 0 and trees > 0:
                     break
                 print(" Inserisci numeri maggiori di zero.")
@@ -82,8 +82,8 @@ def main():
                 print(" Inserisci dei numeri validi.")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        job_id = f"job_{dataset}_{trees}trees_{timestamp}"
-
+        job_id = f"job_{dataset}_{trees}trees_{workers}workers_{timestamp}"
+        
         payload = {
             "mode": "train",
             "job_id": job_id,
@@ -108,18 +108,27 @@ def main():
         print("\n=== MODELLI DISPONIBILI ===")
         # Formattazione "Umana" dei modelli
         for i, m in enumerate(models):
-            # Es: "job_taxi_200trees_20240308_153022" -> divide in base agli underscore
             parts = m.split('_')
             try:
-                alberi = parts[2].replace('trees', '')
-                data_raw = parts[3]
-                ora_raw = parts[4]
+                # Controlliamo se è un modello nuovo (col numero di worker nel nome)
+                if "workers" in m:
+                    alberi = parts[2].replace('trees', '')
+                    workers_count = parts[3].replace('workers', '')
+                    data_raw = parts[4]
+                    ora_raw = parts[5]
+                # Fallback: Se è un modello vecchio (solo alberi) o generato male
+                else:
+                    alberi = parts[2].replace('trees', '')
+                    workers_count = "?" # Non lo sappiamo dal nome
+                    data_raw = parts[3]
+                    ora_raw = parts[4]
+                    
                 data_formattata = f"{data_raw[6:8]}/{data_raw[4:6]}/{data_raw[0:4]}"
                 ora_formattata = f"{ora_raw[0:2]}:{ora_raw[2:4]}:{ora_raw[4:6]}"
                 
-                print(f"  [{i}]  Alberi: {alberi:<4} |  Data: {data_formattata} {ora_formattata}  (ID: {m})")
+                print(f"  [{i}]  Alberi: {alberi:<4} |  Worker: {workers_count:<2} |  Data: {data_formattata} {ora_formattata}  (ID: {m})")
             except Exception:
-                # Fallback se il nome della cartella non segue lo standard esatto
+                # Se la cartella ha un nome completamente diverso dallo standard, la stampa così com'è
                 print(f"  [{i}] {m}")
         
         while True:
