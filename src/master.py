@@ -536,9 +536,15 @@ def main():
                     modelli_s3_uris = conta_parti_modello(bucket, dataset, target_model)
                     num_workers = len(modelli_s3_uris)
                     
-                    print(f"📦 Modello '{target_model}' diviso in {num_workers} parti. Avvio Worker...")
-                    scale_worker_infrastructure(num_workers)
+                    print(f" Modello '{target_model}' diviso in {num_workers} parti. Avvio Worker...")
                     
+                    # --- TIMER 1: PROVISIONING AWS (COLD START) ---
+                    start_provisioning = time.time()
+                    scale_worker_infrastructure(num_workers)
+                    tempo_provisioning = time.time() - start_provisioning
+                    
+                    # --- TIMER 2: INFERENZA PURA (SQS + CALCOLO) ---
+                    start_inferenza = time.time()
                     for i, uri in enumerate(modelli_s3_uris):
                         task_id = f"task_infer_rt_{i+1}"
                         infer_task = {
@@ -558,10 +564,12 @@ def main():
                                 # Verifica che sia la risposta strutturata real-time (dict) e non il bulk (stringa)
                                 if isinstance(res_dati, dict) and res_dati.get("tipo") == "singolo":
                                     voti_ricevuti.append(res_dati['valore'])
-                                    print(f"   -> Ricevuta predizione locale da un worker: {res_dati['valore']}")
+                                    print(f" -> Ricevuta predizione locale da un worker: {res_dati['valore']}")
                                     
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                                 
+                    tempo_inferenza_pura = time.time() - start_inferenza
+                    
                     scale_worker_infrastructure(0)
                     
                     # Consenso distribuito (Aggregation)
@@ -574,9 +582,13 @@ def main():
                         tipo_task = "Regressione (Media)"
                         
                     tempo_totale = time.time() - start_totale
+                    
                     print("\n" + "=" * 60)
-                    print(f" RISULTATO FINALE INFERENZA ({tipo_task}): {predizione_finale}")
-                    print(f" Tempo di latenza sistema: {tempo_totale:.2f}s")
+                    print(f" RISULTATO FINALE INFERENZA ({tipo_task}): {predizione_finale:.2f}")
+                    print("-" * 60)
+                    print(f" Tempo di Provisioning AWS (Cold Start):  {tempo_provisioning:.2f}s")
+                    print(f" Tempo di Inferenza (Calcolo + SQS):      {tempo_inferenza_pura:.2f}s")
+                    print(f" Tempo di Latenza TOTALE del sistema:     {tempo_totale:.2f}s")
                     print("=" * 60 + "\n")
 
             finally:
