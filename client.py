@@ -177,7 +177,7 @@ def main():
             "dataset": dataset,
             "target_model": target_model,
             "tuple_data": tuple_data
-        }}
+        }
 
     # ==========================================
     # INVIO MESSAGGIO ALLA CODA
