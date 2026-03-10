@@ -10,8 +10,8 @@ CLIENT_QUEUE_URL = 'https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQ
 AWS_REGION = 'us-east-1'
 S3_BUCKET = "distributed-random-forest-bkt"
 
+# Cerca su S3 i modelli addestrati per il dataset specificato
 def list_available_models(s3_client, bucket, dataset):
-    """Cerca su S3 i modelli addestrati per il dataset specificato"""
     prefix = f"models/{dataset}/"
     resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix, Delimiter='/')
     
@@ -146,7 +146,7 @@ def main():
         feature_attese = {
             'taxi': 11,
             'higgs': 28,
-            'airlines': 7 # <---IMPORTANTE: Sostituisci col numero reale del tuo dataset airlines
+            'airlines': 10
         }
         
         num_richiesto = feature_attese.get(dataset, 0)
