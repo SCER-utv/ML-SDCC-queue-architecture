@@ -14,18 +14,18 @@ from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
 
 # ==========================================
-# CONFIGURAZIONE CODE SQS (Le 5 Code)
+# CONFIGURAZIONE DINAMICA DA JSON
 # ==========================================
-AWS_REGION = 'us-east-1'
-CLIENT_QUEUE_URL = 'https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo'
+config = load_config()
 
-TRAIN_TASK_QUEUE = 'https://sqs.us-east-1.amazonaws.com/248593862537/train-task-queue'
-TRAIN_RESPONSE_QUEUE = 'https://sqs.us-east-1.amazonaws.com/248593862537/train-response-queue'
+AWS_REGION = config.get("aws_region")
+ASG_NAME = config.get("asg_name")
 
-INFER_TASK_QUEUE = 'https://sqs.us-east-1.amazonaws.com/248593862537/infer-task-queue'
-INFER_RESPONSE_QUEUE = 'https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue'
-
-ASG_NAME = 'DRF-Worker-ASG-new'
+CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
+TRAIN_TASK_QUEUE = config["sqs_queues"]["train_task"]
+TRAIN_RESPONSE_QUEUE = config["sqs_queues"]["train_response"]
+INFER_TASK_QUEUE = config["sqs_queues"]["infer_task"]
+INFER_RESPONSE_QUEUE = config["sqs_queues"]["infer_response"]
 
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
