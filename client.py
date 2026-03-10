@@ -8,13 +8,13 @@ try:
     with open("config/config.json", "r") as f:
         config = json.load(f)
 except FileNotFoundError:
-    print(" Errore: File config/config.json non trovato! Assicurati di lanciare lo script dalla root del progetto.")
+    print(" Errore: File config/config.json non trovato! Lancia lo script dalla root del progetto.")
     sys.exit(1)
 
 CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
 AWS_REGION = config.get("aws_region")
 S3_BUCKET = config.get("s3_bucket")
-FEATURE_ATTESE = config.get("features_attese", {})
+DATASETS_METADATA = config.get("datasets_metadata", {})
 
 def list_available_models(s3_client, bucket, dataset):
     prefix = f"models/{dataset}/"
@@ -35,28 +35,34 @@ def main():
 
     clear_screen()
     print("="*60)
-    print(" DISTRIBUTED RANDOM FOREST - CLI CLIENT 🚀")
+    print("  DISTRIBUTED RANDOM FOREST - CLI CLIENT 🚀")
     print("="*60)
 
     print("\nCosa desideri fare?")
-    print("  1) Addestramento Distribuito (+ Test Bulk)")
-    print("  2) Inferenza Real-Time (Singola Predizione)")
+    print("  1)  Addestramento Distribuito (+ Test Bulk)")
+    print("  2)  Inferenza Real-Time (Singola Predizione)")
     
     while True:
-        scelta_mode = input("\n👉 Inserisci 1 o 2: ").strip()
+        scelta_mode = input("\n Inserisci 1 o 2: ").strip()
         if scelta_mode in ['1', '2']:
             mode = 'train' if scelta_mode == '1' else 'infer'
             break
-        print("❌ Scelta non valida.")
+        print(" Scelta non valida.")
 
+    # --- MENU DATASET GENERATO DINAMICAMENTE ---
     print("\n" + "-"*40)
-    print("  Seleziona il Dataset di riferimento:")
-    print("  1) Taxi (Regressione)")
-    print("  2) Airlines (Classificazione)")
+    print(" Seleziona il Dataset di riferimento:")
     
-    dataset_map = {'1': 'taxi', '2': 'airlines'}
+    available_datasets = list(DATASETS_METADATA.keys())
+    dataset_map = {}
+    
+    for i, ds_name in enumerate(available_datasets, start=1):
+        ds_type = DATASETS_METADATA[ds_name]["type"]
+        print(f"  {i}) {ds_name.capitalize()} ({ds_type.capitalize()})")
+        dataset_map[str(i)] = ds_name
+        
     while True:
-        scelta_ds = input("\n👉 Inserisci 1 o 2: ").strip()
+        scelta_ds = input(f"\n Inserisci un numero da 1 a {len(available_datasets)}: ").strip()
         if scelta_ds in dataset_map:
             dataset = dataset_map[scelta_ds]
             break
@@ -131,7 +137,7 @@ def main():
             except ValueError:
                 print(" Inserisci un numero.")
 
-        num_richiesto = FEATURE_ATTESE.get(dataset, 0)
+        num_richiesto = DATASETS_METADATA[dataset]["features"]
 
         print("\n" + "-"*40)
         print(" Inserimento Dati per Predizione")
@@ -163,7 +169,7 @@ def main():
     print(" Invio richiesta al Master Node in corso...")
     
     try:
-        response = sqs_client.send_message(
+        sqs_client.send_message(
             QueueUrl=CLIENT_QUEUE_URL,
             MessageBody=json.dumps(payload),
             MessageGroupId="ML_Jobs",
