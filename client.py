@@ -3,18 +3,22 @@ import json
 import sys
 from datetime import datetime
 
-# ==========================================
-# CONFIGURAZIONI
-# ==========================================
-CLIENT_QUEUE_URL = 'https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo'
-AWS_REGION = 'us-east-1'
-S3_BUCKET = "distributed-random-forest-bkt"
+# --- CARICAMENTO DINAMICO CONFIGURAZIONE ---
+try:
+    with open("config/config.json", "r") as f:
+        config = json.load(f)
+except FileNotFoundError:
+    print(" Errore: File config/config.json non trovato! Assicurati di lanciare lo script dalla root del progetto.")
+    sys.exit(1)
 
-# Cerca su S3 i modelli addestrati per il dataset specificato
+CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
+AWS_REGION = config.get("aws_region")
+S3_BUCKET = config.get("s3_bucket")
+FEATURE_ATTESE = config.get("features_attese", {})
+
 def list_available_models(s3_client, bucket, dataset):
     prefix = f"models/{dataset}/"
     resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix, Delimiter='/')
-    
     models = []
     if 'CommonPrefixes' in resp:
         for obj in resp['CommonPrefixes']:
@@ -23,7 +27,6 @@ def list_available_models(s3_client, bucket, dataset):
     return models
 
 def clear_screen():
-    # Stampa un po' di righe vuote per pulire il terminale
     print("\n" * 2)
 
 def main():
@@ -32,31 +35,28 @@ def main():
 
     clear_screen()
     print("="*60)
-    print(" DISTRIBUTED RANDOM FOREST - CLI CLIENT ")
+    print(" DISTRIBUTED RANDOM FOREST - CLI CLIENT 🚀")
     print("="*60)
 
-    # --- STEP 1: SCELTA MODALITÀ ---
     print("\nCosa desideri fare?")
     print("  1) Addestramento Distribuito (+ Test Bulk)")
     print("  2) Inferenza Real-Time (Singola Predizione)")
     
     while True:
-        scelta_mode = input("\n Inserisci 1 o 2: ").strip()
+        scelta_mode = input("\n👉 Inserisci 1 o 2: ").strip()
         if scelta_mode in ['1', '2']:
             mode = 'train' if scelta_mode == '1' else 'infer'
             break
-        print(" Scelta non valida.")
+        print("❌ Scelta non valida.")
 
-    # --- STEP 2: SCELTA DATASET ---
     print("\n" + "-"*40)
-    print(" Seleziona il Dataset di riferimento:")
+    print("  Seleziona il Dataset di riferimento:")
     print("  1) Taxi (Regressione)")
-    print("  2) Higgs (Classificazione)")
-    print("  3) Airlines (Classificazione)")
+    print("  2) Airlines (Classificazione)")
     
-    dataset_map = {'1': 'taxi', '2': 'higgs', '3': 'airlines'}
+    dataset_map = {'1': 'taxi', '2': 'airlines'}
     while True:
-        scelta_ds = input("\n Inserisci 1, 2 o 3: ").strip()
+        scelta_ds = input("\n👉 Inserisci 1 o 2: ").strip()
         if scelta_ds in dataset_map:
             dataset = dataset_map[scelta_ds]
             break
@@ -64,12 +64,9 @@ def main():
 
     payload = {}
 
-    # ==========================================
-    # RAMO A: TRAINING
-    # ==========================================
     if mode == 'train':
         print("\n" + "-"*40)
-        print(f" Configurazione Parametri per: {dataset.upper()}")
+        print(f"  Configurazione Parametri per: {dataset.upper()}")
         
         while True:
             try:
@@ -92,9 +89,6 @@ def main():
             "num_trees": trees
         }
 
-    # ==========================================
-    # RAMO B: INFERENZA
-    # ==========================================
     elif mode == 'infer':
         print("\n" + "-"*40)
         print(f" Ricerca dei modelli '{dataset}' salvati su S3...")
@@ -106,20 +100,17 @@ def main():
             sys.exit(0)
             
         print("\n=== MODELLI DISPONIBILI ===")
-        # Formattazione "Umana" dei modelli
         for i, m in enumerate(models):
             parts = m.split('_')
             try:
-                # Controlliamo se è un modello nuovo (col numero di worker nel nome)
                 if "workers" in m:
                     alberi = parts[2].replace('trees', '')
                     workers_count = parts[3].replace('workers', '')
                     data_raw = parts[4]
                     ora_raw = parts[5]
-                # Fallback: Se è un modello vecchio (solo alberi) o generato male
                 else:
                     alberi = parts[2].replace('trees', '')
-                    workers_count = "?" # Non lo sappiamo dal nome
+                    workers_count = "?" 
                     data_raw = parts[3]
                     ora_raw = parts[4]
                     
@@ -128,7 +119,6 @@ def main():
                 
                 print(f"  [{i}]  Alberi: {alberi:<4} |  Worker: {workers_count:<2} |  Data: {data_formattata} {ora_formattata}  (ID: {m})")
             except Exception:
-                # Se la cartella ha un nome completamente diverso dallo standard, la stampa così com'è
                 print(f"  [{i}] {m}")
         
         while True:
@@ -141,33 +131,23 @@ def main():
             except ValueError:
                 print(" Inserisci un numero.")
 
-        # --- VALIDAZIONE DELLE FEATURE IN INGRESSO ---
-        # Dizionario delle feature attese per ogni dataset (Aggiornalo se i tuoi CSV hanno numeri diversi)
-        feature_attese = {
-            'taxi': 11,
-            'higgs': 28,
-            'airlines': 10
-        }
-        
-        num_richiesto = feature_attese.get(dataset, 0)
+        num_richiesto = FEATURE_ATTESE.get(dataset, 0)
 
         print("\n" + "-"*40)
         print(" Inserimento Dati per Predizione")
         print(f"ATTENZIONE: Il dataset '{dataset.upper()}' richiede ESATTAMENTE {num_richiesto} parametri!")
-        print("Inserisci i valori separati da virgola (es: 1.0, 2.5, 3.1 ...)")
         
         while True:
-            raw_tuple = input(f" Inserisci i {num_richiesto} valori: ").strip()
+            raw_tuple = input(f" Inserisci i {num_richiesto} valori (separati da virgola): ").strip()
             try:
                 tuple_data = [float(x.strip()) for x in raw_tuple.split(',')]
                 
-                # Validazione della lunghezza prima di inviare ad AWS!
                 if len(tuple_data) == num_richiesto:
                     break
                 else:
                     print(f" ERRORE: Hai inserito {len(tuple_data)} valori, ma il modello ne aspetta {num_richiesto}!")
             except ValueError:
-                print(" ERRORE di formattazione. Usa solo numeri e il punto per i decimali (es. 10.5).")
+                print(" ERRORE di formattazione. Usa solo numeri (es. 10.5).")
 
         req_id = f"req_{dataset}_{int(datetime.now().timestamp())}"
         
@@ -179,9 +159,6 @@ def main():
             "tuple_data": tuple_data
         }
 
-    # ==========================================
-    # INVIO MESSAGGIO ALLA CODA
-    # ==========================================
     print("\n" + "="*60)
     print(" Invio richiesta al Master Node in corso...")
     
