@@ -2,20 +2,27 @@
   "model_id": "rf_distributed",
   "models_directory": "models/checkpoints/",
   "s3_bucket": "distributed-random-forest-bkt",
+  "aws_region": "us-east-1",
+  "asg_name": "DRF-Worker-ASG-new",
 
+  "sqs_queues": {
+    "client": "https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo",
+    "train_task": "https://sqs.us-east-1.amazonaws.com/248593862537/train-task-queue",
+    "train_response": "https://sqs.us-east-1.amazonaws.com/248593862537/train-response-queue",
+    "infer_task": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-task-queue",
+    "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
+  },
+
+  "features_attese": {
+    "taxi": 11,
+    "airlines": 10
+  },
+  
   "paths": {
-    "ids": {
-      "train": "data/processed/ids/ids_train.csv",
-      "test": "data/processed/ids/ids_test.csv"
-    },
     "taxi": {
       "train": "data/processed/taxi/taxi_train.csv",
       "test": "data/processed/taxi/taxi_test.csv"
-    },
-    "higgs": {
-      "train": "data/processed/higgs/higgs_train.csv",
-      "test": "data/processed/higgs/higgs_test.csv"
-    },
+    }
     "airlines": {
       "train": "data/processed/airlines/airlines_train.csv",
       "test": "data/processed/airlines/airlines_test.csv"
