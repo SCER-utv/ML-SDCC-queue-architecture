@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
--
+
 class BaseModel(ABC):
     @abstractmethod
     def process_and_train(self, df, params):
