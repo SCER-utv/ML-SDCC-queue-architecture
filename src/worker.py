@@ -148,11 +148,10 @@ def esegui_inferenza(infer_task_data, receipt_handle):
             dati = np.array(infer_task_data['tuple_data']).reshape(1, -1)
             
             # Usiamo direttamente la predizione del modello scikit-learn
-            predizione_locale = rf.predict(dati)[0] 
-            
+            all_pred = [float(tree.predict(dati)[0]) for tree in rf.estimators_]
             os.remove(local_model_path)
             # Non salviamo nulla su S3, ritorniamo il dizionario direttamente al Master!
-            return {"tipo": "singolo", "valore": float(predizione_locale)}
+            return {"tipo": "singolo", "valore": all_pred}
 
         # CASO 2: INFERENZA BULK DA S3 (Test set per metriche classiche)
         else:

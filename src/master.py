@@ -300,7 +300,7 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
     s3_client.put_object(Bucket=target_bucket, Key=s3_key, Body=csv_buffer.getvalue())
     print(f" [METRICHE] Risultati accodati permanentemente in: s3://{target_bucket}/{s3_key}")
 
-def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, trees, train_time, infer_time):
+def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, trees, weights, train_time, infer_time):
     print("\n" + "=" * 50)
     print(" FASE DI AGGREGAZIONE E VALUTAZIONE FINALE")
     print("=" * 50)
@@ -365,7 +365,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
         # ---------------------------------------------------------
         print(" Rilevato task di Regressione. Calcolo la media globale...")
 
-        y_pred = np.mean(voti_list, axis=0)
+        y_pred = np.average(voti_list, axis=0, weights=weights)
 
         mse = mean_squared_error(y_true, y_pred)
         rmse = np.sqrt(mse)
@@ -524,7 +524,13 @@ def main():
                     tempo_totale = time.time() - start_totale
         
                     try:
-                        aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], tempo_training, tempo_inferenza)
+                        weights = []
+                        trees_per_worker = math.floor(job_data['num_trees'] / num_workers)
+                        trees_remainder = job_data['num_trees'] % num_workers
+                        for i in range(num_workers):
+                            weights[i] = trees_per_worker + (1 if i < trees_remainder else 0)
+
+                        aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], weights, tempo_training, tempo_inferenza)
                     except Exception as e:
                         print(f" Errore durante l'aggregazione finale: {e}")
                         
@@ -558,18 +564,23 @@ def main():
                         }
                         sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
                         
-                    voti_ricevuti = []
-                    while len(voti_ricevuti) < num_workers:
+                    voti_ricevuti_totali = []
+                    messaggi_letti = 0
+                    while messaggi_letti < num_workers:
                         res = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, WaitTimeSeconds=2)
                         if 'Messages' in res:
                             for msg in res['Messages']:
                                 body = json.loads(msg['Body'])
-                                res_dati = body['s3_voti_uri'] 
+                                res_dati = body['s3_voti_uri']
                                 
                                 # Verifica che sia la risposta strutturata real-time (dict) e non il bulk (stringa)
                                 if isinstance(res_dati, dict) and res_dati.get("tipo") == "singolo":
-                                    voti_ricevuti.append(res_dati['valore'])
-                                    print(f" -> Ricevuta predizione locale da un worker: {res_dati['valore']}")
+
+                                    lista_previsioni_worker = res_dati['valore']
+                                    voti_ricevuti_totali.extend(lista_previsioni_worker)
+                                    messaggi_letti += 1
+
+                                    print(f" -> Ricevuti {len(lista_previsioni_worker)} voti da un worker.")
                                     
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                                 
@@ -580,10 +591,13 @@ def main():
                     # Consenso distribuito (Aggregation)
                     ml_handler = ModelFactory.get_model(dataset)
                     if ml_handler.task_type == 'classification':
-                        predizione_finale = max(set(voti_ricevuti), key=voti_ricevuti.count) # Moda / Maggioranza
+                        predizione_finale = max(set(voti_ricevuti_totali), key=voti_ricevuti_totali.count) # Moda / Maggioranza
                         tipo_task = "Classificazione (Voto Maggioranza)"
+                        voti_0 = voti_ricevuti_totali.count(0)
+                        voti_1 = voti_ricevuti_totali.count(1)
+                        print(f" [SPOGLIO] Classe 0: {voti_0} voti | Classe 1: {voti_1} voti")
                     else:
-                        predizione_finale = sum(voti_ricevuti) / len(voti_ricevuti) # Media
+                        predizione_finale = sum(voti_ricevuti_totali) / len(voti_ricevuti_totali) # Media
                         tipo_task = "Regressione (Media)"
                         
                     tempo_totale = time.time() - start_totale
