@@ -77,7 +77,7 @@ def main():
 
     if mode == 'train':
         print("\n" + "-"*40)
-        print(f"⚙️  Configurazione Parametri per: {dataset.upper()}")
+        print(f"  Configurazione Parametri per: {dataset.upper()}")
         
         while True:
             try:
@@ -128,7 +128,7 @@ def main():
                 data_formattata = f"{data_raw[6:8]}/{data_raw[4:6]}/{data_raw[0:4]}"
                 ora_formattata = f"{ora_raw[0:2]}:{ora_raw[2:4]}:{ora_raw[4:6]}"
                 
-                print(f"  [{i}]  Alberi: {alberi:<4} | 🖥️ Worker: {workers_count:<2} | 📅 Data: {data_formattata} {ora_formattata}  (ID: {m})")
+                print(f"  [{i}]  Alberi: {alberi:<4} |  Worker: {workers_count:<2} |  Data: {data_formattata} {ora_formattata}  (ID: {m})")
             except Exception:
                 print(f"  [{i}] {m}")
         
@@ -171,7 +171,7 @@ def main():
         }
 
     print("\n" + "="*60)
-    print("📤 Invio richiesta al Master Node in corso...")
+    print(" Invio richiesta al Master Node in corso...")
     
     try:
         sqs_client.send_message(
