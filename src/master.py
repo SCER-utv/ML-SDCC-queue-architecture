@@ -500,7 +500,7 @@ def main():
                                     print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
                                     update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train)
         
-                                sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])['ReceiptHandle'])
+                                sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                         
                         if len(train_completati) == num_workers and tempo_training == 0:
                             tempo_training = time.time() - start_train
