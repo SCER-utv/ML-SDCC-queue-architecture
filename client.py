@@ -2,13 +2,13 @@ import boto3
 import json
 import sys
 from datetime import datetime
+from src.utils.config import load_config
 
 # --- CARICAMENTO DINAMICO CONFIGURAZIONE ---
 try:
-    with open("config/config.json", "r") as f:
-        config = json.load(f)
-except FileNotFoundError:
-    print(" Errore: File config/config.json non trovato! Lancia lo script dalla root del progetto.")
+    config = load_config()
+except Exception as e:
+    print(f"❌ Errore critico durante l'Auto-Discovery da S3: {e}")
     sys.exit(1)
 
 CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
