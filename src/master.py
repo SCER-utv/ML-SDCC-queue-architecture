@@ -134,8 +134,7 @@ def generate_initial_training_tasks(job_data):
     job_id = job_data['job_id']
 
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    dataset_paths = config['paths'][dataset]
-
+    
     train_s3_key = config['datasets_metadata'][dataset]['train_path']
     train_s3_uri = f"s3://{target_bucket}/{train_s3_key}"
 
@@ -238,8 +237,7 @@ def generate_inference_tasks(job_id, train_resp, dataset):
 
     config = load_config()
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    dataset_paths = config['paths'][dataset]
-
+    
     test_s3_key = config['datasets_metadata'][dataset]['test_path']
     test_s3_uri = f"s3://{target_bucket}/{test_s3_key}"
 
