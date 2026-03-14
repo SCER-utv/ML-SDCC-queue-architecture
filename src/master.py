@@ -468,7 +468,7 @@ def main():
                 if mode == 'train':
                     num_workers = job_data['num_workers']
         
-                    # 1. 🛡️ FASE DI RECOVERY DYNAMODB
+                    # 1. FASE DI RECOVERY DYNAMODB
                     train_completati, risultati_inferenza_s3, start_train_db, tasks_dispatched, tempo_training, tempo_inferenza = get_job_state(job_id)
                     
                     if start_train_db is None:
