@@ -15,7 +15,7 @@
 
   "target_registry": {
     "taxi": "Label",
-    ## DA MODIFICARE, FASTIDIO
+    ## DA MODIFICARE
     "airlines": "TARGET_DELAY",
     "higgs": "Label"
   }
