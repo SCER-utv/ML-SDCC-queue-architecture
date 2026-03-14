@@ -4,7 +4,7 @@
   "s3_bucket": "distributed-random-forest-bkt",
   "aws_region": "us-east-1",
   "asg_name": "DRF-Worker-ASG-new",
-
+  
   "sqs_queues": {
     "client": "https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo",
     "train_task": "https://sqs.us-east-1.amazonaws.com/248593862537/train-task-queue",
@@ -22,4 +22,5 @@
       "target": "TARGET_DELAY",
       "type": "classification"
     }
+  }
 }
