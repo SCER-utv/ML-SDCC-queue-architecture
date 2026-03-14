@@ -19,7 +19,7 @@
       "type": "regression"
     },
     "airlines": {
-      "target": "TARGET_DELAY",
+      "target": "Label",
       "type": "classification"
     }
   }
