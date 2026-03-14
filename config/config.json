@@ -13,27 +13,9 @@
     "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
   },
 
-  "datasets_metadata": {
-      "taxi": {
-        "type": "regression",
-        "target": "Label",
-        "features": 11
-      },
-      "airlines": {
-        "type": "classification",
-        "target": "TARGET_DELAY",
-        "features": 10
-      }
-    },
-  
-  "paths": {
-    "taxi": {
-      "train": "data/processed/taxi/taxi_train.csv",
-      "test": "data/processed/taxi/taxi_test.csv"
-    }
-    "airlines": {
-      "train": "data/processed/airlines/airlines_train.csv",
-      "test": "data/processed/airlines/airlines_test.csv"
-    }
+  "target_registry": {
+    "taxi": "Label",
+    "airlines": "TARGET_DELAY",
+    "higgs": "Label"
   }
 }
