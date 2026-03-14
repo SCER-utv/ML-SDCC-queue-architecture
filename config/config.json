@@ -13,9 +13,13 @@
     "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
   },
 
-  "target_registry": {
-    "taxi": "Label",
-    "airlines": "TARGET_DELAY",
-    "higgs": "Label"
-  }
+  "dataset_registry": {
+    "taxi": {
+      "target": "Label",
+      "type": "regression"
+    },
+    "airlines": {
+      "target": "TARGET_DELAY",
+      "type": "classification"
+    }
 }
