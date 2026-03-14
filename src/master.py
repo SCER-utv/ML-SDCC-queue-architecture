@@ -400,22 +400,29 @@ def get_job_state(job_id):
     try:
         response = table.get_item(Key={'job_id': job_id})
         if 'Item' in response:
-            start_time_str = response['Item'].get('start_time')
-            start_time = float(start_time_str) if start_time_str else time.time()
-            return set(response['Item'].get('completed_train', [])), response['Item'].get('completed_infer', {}), start_time
+            start_time = float(response['Item'].get('start_time'))
+            tasks_dispatched = response['Item'].get('tasks_dispatched', False)
+            tempo_training = float(response['Item'].get('tempo_training', 0.0))
+            tempo_inferenza = float(response['Item'].get('tempo_inferenza', 0.0))
+            return (set(response['Item'].get('completed_train', [])), 
+                    response['Item'].get('completed_infer', {}), 
+                    start_time, tasks_dispatched, tempo_training, tempo_inferenza)
     except Exception:
         pass
-    return set(), {}, time.time() # Se non esiste, il job è nuovo
+    # Ritorna None come start_time se il job è completamente nuovo
+    return set(), {}, None, False, 0.0, 0.0 
 
-# --- AGGIORNATO: Ora accetta e salva anche il tempo di inizio ---
-def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time):
+def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time, tasks_dispatched, tempo_training=0.0, tempo_inferenza=0.0):
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
     table = dynamodb.Table('JobStatus')
     table.put_item(Item={
         'job_id': job_id,
-        'completed_train': list(completed_train_set), # Dynamo non accetta i Set di Python direttamente
+        'completed_train': list(completed_train_set),
         'completed_infer': completed_infer_dict,
-        'start_time': str(start_time)
+        'start_time': str(start_time),
+        'tasks_dispatched': tasks_dispatched,
+        'tempo_training': str(tempo_training),
+        'tempo_inferenza': str(tempo_inferenza)
     })
 
 # ==========================================
@@ -460,30 +467,38 @@ def main():
                 # RAMO A: TRAINING + TEST BULK
                 if mode == 'train':
                     num_workers = job_data['num_workers']
-                    start_totale = time.time() 
-                    start_train = time.time()
-                    tempo_training = 0
-                    tempo_inferenza = 0
         
-                    scale_worker_infrastructure(num_workers)
-        
-                    # --- AGGIORNATO: STATO DELLA PIPELINE SU DYNAMODB (Gestione Tempi) ---
-                    train_completati, risultati_inferenza_s3, start_train_db = get_job_state(job_id)
+                    # 1. 🛡️ FASE DI RECOVERY DYNAMODB
+                    train_completati, risultati_inferenza_s3, start_train_db, tasks_dispatched, tempo_training, tempo_inferenza = get_job_state(job_id)
                     
-                    if len(train_completati) == 0:
-                        # JOB NUOVO: Inizializziamo i timer
+                    if start_train_db is None:
+                        # JOB NUOVO: Fissa il timer nel DB per proteggersi dai crash pre-Fan-Out
                         start_totale = time.time() 
                         start_train = time.time()
-                        generate_initial_training_tasks(job_data)
+                        update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, False, tempo_training, tempo_inferenza)
                     else:
-                        # RECOVERY: Ripristiniamo i timer dal database
+                        # RECOVERY: Ripristina i timer dal database
                         start_totale = start_train_db
                         start_train = start_train_db
-                        print(f" [RECOVERY] Trovati {len(train_completati)} task di training già completati su DynamoDB!")
-                        print(f" [RECOVERY] Timer ripristinato al timestamp originale.")
+                        print(f" [RECOVERY] Timer globale ripristinato dal Database!")
+                        print(f" [RECOVERY] Stato: {len(train_completati)} Train e {len(risultati_inferenza_s3)} Infer completati.")
+        
+                    # 2. PROVISIONING (Idempotente)
+                    scale_worker_infrastructure(num_workers)
+
+                    # 3. FAN-OUT SICURO (Evita duplicati SQS)
+                    if not tasks_dispatched:
+                        generate_initial_training_tasks(job_data)
+                        tasks_dispatched = True # Chiudiamo il lucchetto!
+                        update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
+                    else:
+                        print(" [RECOVERY] Task già in coda SQS prima del crash. Salto il Fan-Out (No Duplicati).")
         
                     print("\n [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
         
+                    start_infer = start_train # Fallback per sicurezza temporale
+
+                    # 4. EVENT LOOP
                     while len(risultati_inferenza_s3) < num_workers:
                         # --- ASCOLTO TRAINING ---
                         res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
@@ -493,18 +508,19 @@ def main():
                                 task_id = train_resp['task_id']
         
                                 if task_id not in train_completati:
-                                    # --- FIX RACE CONDITION: Prima inviamo, poi salviamo su DB ---
+                                    # RACE CONDITION FIX: Prima in coda SQS, poi su DynamoDB
                                     generate_inference_tasks(job_id, train_resp, dataset)
-                                    
                                     train_completati.add(task_id)
                                     print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train)
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
         
                                 sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                         
-                        if len(train_completati) == num_workers and tempo_training == 0:
+                        # Stop timer training e avvio timer inferenza
+                        if len(train_completati) == num_workers and tempo_training == 0.0:
                             tempo_training = time.time() - start_train
                             start_infer = time.time() 
+                            update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
         
                         # --- ASCOLTO INFERENZA ---
                         res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
@@ -513,23 +529,28 @@ def main():
                                 body = json.loads(msg['Body'])
                                 task_id = body['task_id']
                                 
-                                # --- FIX: Estraiamo il valore dalla nuova struttura a dizionario! ---
                                 res_dati = body['s3_voti_uri']
-                                if isinstance(res_dati, dict):
-                                    voti_s3_uri = res_dati['valore']
-                                else:
-                                    voti_s3_uri = res_dati  # Fallback di sicurezza
+                                voti_s3_uri = res_dati['valore'] if isinstance(res_dati, dict) else res_dati
                                 
                                 if task_id not in risultati_inferenza_s3:
                                     risultati_inferenza_s3[task_id] = voti_s3_uri
                                     print(f" [INFERENZA FATTA] {task_id} completato! ({len(risultati_inferenza_s3)}/{num_workers})")
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train)
+
+                                    # Se abbiamo finito tutto, fermiamo il timer dell'inferenza prima del DB!
+                                    if len(risultati_inferenza_s3) == num_workers and tempo_inferenza == 0.0:
+                                        tempo_inferenza = time.time() - start_infer
+
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
         
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
         
-                    if tempo_inferenza == 0:
-                        tempo_inferenza = time.time() - start_infer
-        
+                    # 5. AGGREGAZIONE FINALE E CHIUSURA
+                    # (Fallback se il master era crashato proprio durante l'aggregazione)
+                    if tempo_training == 0.0:
+                        tempo_training = time.time() - start_train
+                    if tempo_inferenza == 0.0:
+                        tempo_inferenza = time.time() - start_totale
+                        
                     print("\n Tutti i Worker hanno completato la pipeline end-to-end!")
                     scale_worker_infrastructure(0)
                     print(" Calcolo delle metriche finali in corso...")
@@ -540,7 +561,6 @@ def main():
                         trees_per_worker = math.floor(job_data['num_trees'] / num_workers)
                         trees_remainder = job_data['num_trees'] % num_workers
                         for i in range(num_workers):
-                            # Usiamo append invece dell'assegnazione per indice!
                             weights.append(trees_per_worker + (1 if i < trees_remainder else 0))
 
                         aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], weights, tempo_training, tempo_inferenza)
