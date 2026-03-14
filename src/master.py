@@ -136,7 +136,7 @@ def generate_initial_training_tasks(job_data):
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
     dataset_paths = config['paths'][dataset]
 
-    train_s3_key = dataset_paths['train']
+    train_s3_key = config['datasets_metadata'][dataset]['train_path']
     train_s3_uri = f"s3://{target_bucket}/{train_s3_key}"
 
 
@@ -240,7 +240,7 @@ def generate_inference_tasks(job_id, train_resp, dataset):
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
     dataset_paths = config['paths'][dataset]
 
-    test_s3_key = dataset_paths['test']
+    test_s3_key = config['datasets_metadata'][dataset]['test_path']
     test_s3_uri = f"s3://{target_bucket}/{test_s3_key}"
 
 
@@ -327,7 +327,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
 
     # 2. SCARICA LA GROUND TRUTH (I valori reali dal test set)
     target_col = ml_handler.target_column
-    test_s3_key = config['paths'][dataset_name]['test']
+    test_s3_key = config['datasets_metadata'][dataset_name]['test_path']
     test_s3_uri = f"s3://{config.get('s3_bucket')}/{test_s3_key}"
 
     print(f" Lettura dei valori reali (Ground Truth) dalla colonna '{target_col}'...")
