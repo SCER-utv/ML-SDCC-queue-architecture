@@ -526,7 +526,8 @@ def main():
                         trees_per_worker = math.floor(job_data['num_trees'] / num_workers)
                         trees_remainder = job_data['num_trees'] % num_workers
                         for i in range(num_workers):
-                            weights[i] = trees_per_worker + (1 if i < trees_remainder else 0)
+                            # Usiamo append invece dell'assegnazione per indice!
+                            weights.append(trees_per_worker + (1 if i < trees_remainder else 0))
 
                         aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], weights, tempo_training, tempo_inferenza)
                     except Exception as e:
