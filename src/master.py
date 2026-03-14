@@ -393,24 +393,29 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
     )
 
 
+# --- AGGIORNATO: Ora salva e recupera il tempo di inizio ---
 def get_job_state(job_id):
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
     table = dynamodb.Table('JobStatus')
     try:
         response = table.get_item(Key={'job_id': job_id})
         if 'Item' in response:
-            return set(response['Item'].get('completed_train', [])), response['Item'].get('completed_infer', {})
+            start_time_str = response['Item'].get('start_time')
+            start_time = float(start_time_str) if start_time_str else time.time()
+            return set(response['Item'].get('completed_train', [])), response['Item'].get('completed_infer', {}), start_time
     except Exception:
         pass
-    return set(), {} # Se non esiste, il job è nuovo
+    return set(), {}, time.time() # Se non esiste, il job è nuovo
 
-def update_job_state(job_id, completed_train_set, completed_infer_dict):
+# --- AGGIORNATO: Ora accetta e salva anche il tempo di inizio ---
+def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time):
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
     table = dynamodb.Table('JobStatus')
     table.put_item(Item={
         'job_id': job_id,
         'completed_train': list(completed_train_set), # Dynamo non accetta i Set di Python direttamente
-        'completed_infer': completed_infer_dict
+        'completed_infer': completed_infer_dict,
+        'start_time': str(start_time)
     })
 
 # ==========================================
@@ -462,13 +467,20 @@ def main():
         
                     scale_worker_infrastructure(num_workers)
         
-                    # STATO DELLA PIPELINE SU DYNAMODB
-                    train_completati, risultati_inferenza_s3 = get_job_state(job_id)
+                    # --- AGGIORNATO: STATO DELLA PIPELINE SU DYNAMODB (Gestione Tempi) ---
+                    train_completati, risultati_inferenza_s3, start_train_db = get_job_state(job_id)
                     
                     if len(train_completati) == 0:
+                        # JOB NUOVO: Inizializziamo i timer
+                        start_totale = time.time() 
+                        start_train = time.time()
                         generate_initial_training_tasks(job_data)
                     else:
+                        # RECOVERY: Ripristiniamo i timer dal database
+                        start_totale = start_train_db
+                        start_train = start_train_db
                         print(f" [RECOVERY] Trovati {len(train_completati)} task di training già completati su DynamoDB!")
+                        print(f" [RECOVERY] Timer ripristinato al timestamp originale.")
         
                     print("\n [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
         
@@ -481,12 +493,14 @@ def main():
                                 task_id = train_resp['task_id']
         
                                 if task_id not in train_completati:
+                                    # --- FIX RACE CONDITION: Prima inviamo, poi salviamo su DB ---
+                                    generate_inference_tasks(job_id, train_resp, dataset)
+                                    
                                     train_completati.add(task_id)
                                     print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3)
-                                    generate_inference_tasks(job_id, train_resp, dataset)
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train)
         
-                                sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                                sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])['ReceiptHandle'])
                         
                         if len(train_completati) == num_workers and tempo_training == 0:
                             tempo_training = time.time() - start_train
@@ -509,7 +523,7 @@ def main():
                                 if task_id not in risultati_inferenza_s3:
                                     risultati_inferenza_s3[task_id] = voti_s3_uri
                                     print(f" [INFERENZA FATTA] {task_id} completato! ({len(risultati_inferenza_s3)}/{num_workers})")
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3)
+                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train)
         
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
         
