@@ -523,8 +523,10 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
 
 # --- AGGIORNATO: Ora salva e recupera il tempo di inizio ---
 def get_job_state(job_id):
+    config = load_config() 
+    table_name = config.get("dynamodb_table", "JobStatus")
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
-    table = dynamodb.Table('JobStatus')
+    table = dynamodb.Table(table_name)
     try:
         response = table.get_item(Key={'job_id': job_id})
         if 'Item' in response:
@@ -541,8 +543,10 @@ def get_job_state(job_id):
     return set(), {}, None, False, 0.0, 0.0 
 
 def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time, tasks_dispatched, tempo_training=0.0, tempo_inferenza=0.0):
+    config = load_config() 
+    table_name = config.get("dynamodb_table", "JobStatus")
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
-    table = dynamodb.Table('JobStatus')
+    table = dynamodb.Table(table_name)
     table.put_item(Item={
         'job_id': job_id,
         'completed_train': list(completed_train_set),
