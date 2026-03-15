@@ -137,7 +137,66 @@ def _get_total_rows_s3_select(bucket, key):
     except Exception as e:
         print(f"[ERRORE S3 Select]: {e}")
         raise e
+
+# Commentare quando abbiamo bisogno di effettuare i testing
+""" def esegui_split_streaming(dataset_name):
+    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/15/15) per '{dataset_name}'...")
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    bucket = config.get("s3_bucket")
+    
+    source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
+    
+    # 3 File di Destinazione su S3
+    train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
+    val_key = f"data/processed/{dataset_name}/{dataset_name}_val.csv"
+    test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
+    
+    # 3 File Locali
+    local_train = f"/tmp/{dataset_name}_train.csv"
+    local_val = f"/tmp/{dataset_name}_val.csv"
+    local_test = f"/tmp/{dataset_name}_test.csv"
+    
+    try:
+        response = s3.get_object(Bucket=bucket, Key=source_key)
+        streaming_sicuro = io.TextIOWrapper(response['Body'], encoding='utf-8')
         
+        with open(local_train, 'w', encoding='utf-8') as f_train, \
+             open(local_val, 'w', encoding='utf-8') as f_val, \
+             open(local_test, 'w', encoding='utf-8') as f_test:
+            
+            header = streaming_sicuro.readline()
+            f_train.write(header)
+            f_val.write(header)
+            f_test.write(header)
+            
+            righe = {'train': 0, 'val': 0, 'test': 0}
+            
+            for line in streaming_sicuro:
+                if line.strip(): 
+                    r = random.random()
+                    if r <= 0.70:            # 70% Train
+                        f_train.write(line)
+                        righe['train'] += 1
+                    elif r <= 0.85:          # 15% Validation (da 0.70 a 0.85)
+                        f_val.write(line)
+                        righe['val'] += 1
+                    else:                    # 15% Test (da 0.85 a 1.0)
+                        f_test.write(line)
+                        righe['test'] += 1
+                        
+        print(f" [PRE-PROCESSING] Split terminato. Train: {righe['train']} | Val: {righe['val']} | Test: {righe['test']}")
+        
+        s3.upload_file(local_train, bucket, train_key)
+        s3.upload_file(local_val, bucket, val_key)
+        s3.upload_file(local_test, bucket, test_key)
+        
+    except Exception as e:
+        print(f" [ERRORE PRE-PROCESSING] Fallimento durante lo split: {e}")
+        raise e
+    finally:
+        if os.path.exists(local_train): os.remove(local_train)
+        if os.path.exists(local_val): os.remove(local_val)
+        if os.path.exists(local_test): os.remove(local_test) """
 
 def esegui_split_streaming(dataset_name):
     print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (Streaming 70/30) per '{dataset_name}'...")
