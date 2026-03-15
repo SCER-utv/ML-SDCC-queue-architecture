@@ -9,7 +9,7 @@ def discover_datasets(s3_bucket, region, dataset_registry):
     datasets = {}
     
     # IL SISTEMA CERCA SOLO NEI DATI PRONTI (PROCESSED)
-    prefix = "data/processed/"
+    prefix = "data/interim/"
     
     try:
         # RIMOSSO IL DELIMITER: Ora esplora brutalmente tutto quello che c'è sotto data/processed/
