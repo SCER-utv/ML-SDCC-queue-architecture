@@ -12,6 +12,7 @@ from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
 import random 
+import io
 
 # ==========================================
 # CONFIGURAZIONE DINAMICA DA JSON
@@ -143,39 +144,45 @@ def esegui_split_streaming(dataset_name):
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
     
-    # Percorsi su S3
     source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
     train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
     test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
     
-    # Percorsi nel disco fisso locale del Master Node (l'EC2 ha almeno 8GB di disco libero)
     local_train = f"/tmp/{dataset_name}_train.csv"
     local_test = f"/tmp/{dataset_name}_test.csv"
     
     try:
-        print(f" [PRE-PROCESSING] Lettura in Streaming da S3 (Zero-RAM mode) in corso...")
-        # 1. Chiediamo ad AWS di aprirci un "Tubo" verso il file gigante, senza scaricarlo
+        print(f" [PRE-PROCESSING] Lettura intelligente in Streaming (riga per riga) in corso...")
         response = s3.get_object(Bucket=bucket, Key=source_key)
         
-        # 2. Apriamo i due file di destinazione sul disco del Master
-        with open(local_train, 'wb') as f_train, open(local_test, 'wb') as f_test:
+        # 1. Il TRUCCO: Avvolgiamo lo streaming grezzo (Body) in un TextIOWrapper 
+        # che capisce l'Encoding UTF-8 e sa riconoscere dove finisce veramente una riga (\n)
+        streaming_sicuro = io.TextIOWrapper(response['Body'], encoding='utf-8')
+        
+        with open(local_train, 'w', encoding='utf-8') as f_train, open(local_test, 'w', encoding='utf-8') as f_test:
             
-            # Leggiamo la primissima riga (L'header delle colonne) e la scriviamo su entrambi i file!
-            header = response['Body'].readline()
+            # Leggiamo l'header in modo pulito
+            header = streaming_sicuro.readline()
             f_train.write(header)
             f_test.write(header)
             
-            # 3. Ora "frulliamo" il resto del file riga per riga.
-            # Questo ciclo usa letteralmente pochi KiloByte di RAM!
-            for line in response['Body']:
-                if random.random() <= 0.70:
-                    f_train.write(line)
-                else:
-                    f_test.write(line)
-                    
-        print(" [PRE-PROCESSING] Split completato sul disco locale. Eseguo l'upload su S3...")
+            # 2. Iteriamo in sicurezza
+            righe_train = 0
+            righe_test = 0
+            
+            for line in streaming_sicuro:
+                # Assicuriamoci che la riga non sia vuota
+                if line.strip(): 
+                    if random.random() <= 0.70:
+                        f_train.write(line)
+                        righe_train += 1
+                    else:
+                        f_test.write(line)
+                        righe_test += 1
+                        
+        print(f" [PRE-PROCESSING] Split terminato. Train: {righe_train} righe | Test: {righe_test} righe.")
+        print(" [PRE-PROCESSING] Eseguo l'upload su S3...")
         
-        # 4. Carichiamo i due file unici e perfetti su S3 (sovrascrivendo quelli vecchi)
         s3.upload_file(local_train, bucket, train_key)
         s3.upload_file(local_test, bucket, test_key)
         
@@ -183,11 +190,10 @@ def esegui_split_streaming(dataset_name):
         print(f" [ERRORE PRE-PROCESSING] Fallimento durante lo split: {e}")
         raise e
     finally:
-        # 5. FONDAMENTALE: Puliamo il disco del Master per non intasarlo ai prossimi job!
         if os.path.exists(local_train): os.remove(local_train)
         if os.path.exists(local_test): os.remove(local_test)
         
-    print(f" [PRE-PROCESSING] Operazione completata! File '{dataset_name}_train.csv' e '_test.csv' pronti all'uso.")
+    print(f" [PRE-PROCESSING] Operazione completata con successo!")
 
 def generate_initial_training_tasks(job_data):
     config = load_config()
