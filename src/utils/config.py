@@ -1,3 +1,9 @@
+import json
+import os
+import boto3
+
+_cached_config = None
+
 def discover_datasets(s3_bucket, region, dataset_registry):
     s3 = boto3.client('s3', region_name=region)
     datasets = {}
@@ -30,14 +36,13 @@ def discover_datasets(s3_bucket, region, dataset_registry):
                 task_type = dataset_registry[dataset_name]["type"]
                 
                 # 3. Definiamo i percorsi FUTURI (dove il Master salverà lo split)
-                # Il Client sa che il Master metterà i file splittati in queste cartelle!
                 train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
                 test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
                 
                 # 4. S3 SELECT: Leggiamo l'intestazione dal file INTERIM originale!
                 select_resp = s3.select_object_content(
                     Bucket=s3_bucket,
-                    Key=key, # <-- Usa la key del file _optimized.csv
+                    Key=key,
                     ExpressionType='SQL',
                     Expression='SELECT * FROM S3Object LIMIT 1',
                     InputSerialization={'CSV': {'FileHeaderInfo': 'NONE'}},
@@ -61,7 +66,7 @@ def discover_datasets(s3_bucket, region, dataset_registry):
                     "type": task_type,
                     "target": target_col,
                     "features": features_count,
-                    "train_path": train_key, # Il Master e i Worker li cercheranno qui!
+                    "train_path": train_key,
                     "test_path": test_key
                 }
                 
@@ -69,3 +74,27 @@ def discover_datasets(s3_bucket, region, dataset_registry):
         print(f"[DISCOVERY WARNING] Errore S3 durante la scansione di {prefix}: {e}")
         
     return datasets
+
+
+def load_config():
+    global _cached_config
+    if _cached_config is not None:
+        return _cached_config
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.abspath(os.path.join(current_dir, '..', '..'))
+    config_path = os.path.join(root_dir, 'config', 'config.json')
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config non trovato in: {config_path}")
+
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+
+    dataset_registry = config.get("dataset_registry", {})
+    print("\n[Auto-Discovery] Scansione intelligente della cartella 'data/interim/' su S3 in corso...")
+    config['datasets_metadata'] = discover_datasets(config['s3_bucket'], config['aws_region'], dataset_registry)
+
+    config['_root_dir'] = root_dir
+    _cached_config = config
+    return config
