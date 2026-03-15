@@ -64,19 +64,17 @@ def scale_worker_infrastructure(num_workers):
         AutoScalingGroupName=ASG_NAME, MinSize=0, DesiredCapacity=num_workers, MaxSize=10
     )
     
-    # Se stiamo spegnendo le macchine (num_workers == 0), usciamo.
     if num_workers == 0:
         return
         
-    print(f" [ASG] Attendo l'avvio delle istanze per rinominarle (DRF-worker1, DRF-worker2...)...")
+    print(f" [ASG] Attendo l'avvio delle istanze per rinominarle (DRF-worker1...)...")
     ec2_client = boto3.client('ec2', region_name=AWS_REGION)
     
-    # Aspettiamo finché AWS non ha effettivamente creato le istanze (Polling)
     max_attesa = 24 # 24 * 5 sec = 2 minuti massimi di attesa
+    istanze_trovate = []
+    
     for _ in range(max_attesa):
         time.sleep(5)
-        # Cerchiamo le istanze che appartengono al nostro Auto Scaling Group
-        # e che non siano nello stato 'terminated' o 'shutting-down'
         risposta = ec2_client.describe_instances(
             Filters=[
                 {'Name': 'tag:aws:autoscaling:groupName', 'Values': [ASG_NAME]},
@@ -89,19 +87,30 @@ def scale_worker_infrastructure(num_workers):
             for inst in reservation.get('Instances', []):
                 istanze_trovate.append(inst['InstanceId'])
                 
-        # Se l'ASG ha partorito tutte le macchine richieste, procediamo col rinominarle
-        if len(istanze_trovate) == num_workers:
+        # Se abbiamo raggiunto il target, interrompiamo l'attesa!
+        if len(istanze_trovate) >= num_workers:
+            break
+            
+    # Alla fine del tempo (o se abbiamo finito prima), rinominiamo TUTTO quello che abbiamo trovato!
+    # Questo gestisce il caso in cui AWS ci dà meno macchine del previsto.
+    if len(istanze_trovate) > 0:
+        if len(istanze_trovate) < num_workers:
+            print(f" [ATTENZIONE AWS] Richiesti {num_workers} Worker, ma AWS ne ha forniti solo {len(istanze_trovate)}. Procedo in modalità degradata.")
+        else:
             print(f" Trovate {len(istanze_trovate)} istanze. Applicazione dei nomi in corso...")
             
-            # Rinominiamo le istanze con un ciclo for
-            for i, instance_id in enumerate(istanze_trovate):
-                nome_worker = f"DRF-worker{i+1}"
+        for i, instance_id in enumerate(istanze_trovate):
+            nome_worker = f"DRF-worker{i+1}"
+            try:
                 ec2_client.create_tags(
                     Resources=[instance_id],
                     Tags=[{'Key': 'Name', 'Value': nome_worker}]
                 )
-            print(" Nomi applicati con successo su EC2!")
-            break
+            except Exception as e:
+                pass # Ignora errori temporanei sui tag
+        print(" Nomi applicati con successo su EC2!")
+    else:
+        print(" [ERRORE CRITICO AWS] Nessuna istanza fornita dall'Auto Scaling Group in 2 minuti!")
 
 
 # [NUOVO METODO ZERO-COPY] Interroga S3 senza scaricare il file
