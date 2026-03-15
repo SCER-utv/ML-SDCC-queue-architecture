@@ -13,6 +13,10 @@
     "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
   },
 
+  "athena_config": {
+    "database": "drf_datasets"
+  },
+  
   "dataset_registry": {
     "taxi": {
       "target": "Label",
