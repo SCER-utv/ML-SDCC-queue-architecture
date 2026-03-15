@@ -12,6 +12,12 @@
     "infer_task": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-task-queue",
     "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
   },
+
+  "split_ratios": {
+    "train": 0.70,
+    "val": 0.15,
+    "test": 0.15
+  },
   
   "dataset_registry": {
     "taxi": {
