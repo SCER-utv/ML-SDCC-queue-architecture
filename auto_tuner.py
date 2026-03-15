@@ -17,9 +17,10 @@ CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
 AWS_REGION = config.get("aws_region")
 
 # GRIGLIA DEGLI IPERPARAMETRI (Modifica questi array prima di avviare)
-DATASET_TO_TEST = "airlines"           # Nome del dataset su cui fare il tuning (es. "airlines" o "taxi")
-WORKERS_TO_TEST = [2, 4, 6]            # Lista del numero di Worker EC2 da testare
-TREES_TO_TEST   = [20, 50, 100, 200]   # Lista del numero totale di Alberi da testare
+Hai detto
+DATASET_TO_TEST = "airlines"          
+WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8]  # Raddoppio dei nodi per misurare lo Speedup
+TREES_TO_TEST   = [5, 10, 25, 50, 100, 200, 400]  # Raddoppio del cari
 # =====================================================================
 
 def main():
