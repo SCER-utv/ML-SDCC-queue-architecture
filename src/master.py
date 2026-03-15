@@ -140,6 +140,14 @@ def _get_total_rows_s3_select(bucket, key):
         print(f"[ERRORE S3 Select]: {e}")
         raise e
 
+# Elimina ricorsivamente tutto il contenuto di una cartella S3 per non lasciare spazzatura.
+def pulisci_cartella_s3(bucket, prefix):
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                s3.delete_object(Bucket=bucket, Key=obj['Key'])
 
 def esegui_split_athena(dataset_name):
     print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/30) con AWS Athena per '{dataset_name}'...")
@@ -148,19 +156,23 @@ def esegui_split_athena(dataset_name):
     train_table = f"{dataset_name}_train_temp"
     test_table = f"{dataset_name}_test_temp"
     
-    # Cartelle temporanee per i risultati di Athena
-    base_out = f"s3://{TARGET_BUCKET}/data/processed/{dataset_name}/.athena_temp/"
+    # Definiamo i percorsi senza s3:// per le API di Boto3, e con s3:// per Athena
+    prefix_temp = f"data/processed/{dataset_name}/.athena_temp/"
+    base_out = f"s3://{TARGET_BUCKET}/{prefix_temp}"
     
-    # 1. Pulizia tabelle precedenti
+    # 1. PULIZIA PREVENTIVA (Svuota la temp in caso di vecchi crash)
+    pulisci_cartella_s3(TARGET_BUCKET, prefix_temp)
+    
+    # 2. DROP DELLE TABELLE SE ESISTONO
     for t in [train_table, test_table]:
         athena_client.start_query_execution(
             QueryString=f"DROP TABLE IF EXISTS {t};",
             QueryExecutionContext={'Database': ATHENA_DB},
-            ResultConfiguration={'OutputLocation': base_out}
+            ResultConfiguration={'OutputLocation': base_out + "logs/"} # Indirizza i log nella temp!
         )
-    time.sleep(3) # Pausa per sincronizzazione AWS
+    time.sleep(2) 
     
-    # 2. Creazione Train (70%) e Test (30%)
+    # 3. CREAZIONE TRAIN (70%) E TEST (30%)
     query_train = f"CREATE TABLE {train_table} WITH (format='CSV', external_location='{base_out}train/') AS SELECT * FROM {source_table} WHERE rand() <= 0.70;"
     query_test = f"CREATE TABLE {test_table} WITH (format='CSV', external_location='{base_out}test/') AS SELECT * FROM {source_table} EXCEPT SELECT * FROM {train_table};"
     
@@ -168,7 +180,7 @@ def esegui_split_athena(dataset_name):
         resp = athena_client.start_query_execution(
             QueryString=q,
             QueryExecutionContext={'Database': ATHENA_DB},
-            ResultConfiguration={'OutputLocation': base_out + "logs/"}
+            ResultConfiguration={'OutputLocation': base_out + "logs/"} # Mette i risultati testuali qui
         )
         
         # Polling: Attendiamo che Athena finisca di calcolare
@@ -181,23 +193,29 @@ def esegui_split_athena(dataset_name):
                 break
             time.sleep(2)
             
-    # 3. RINOMINA E SPOSTAMENTO DEI FILE:
-    # Athena genera file con nomi casuali. Li rinominiamo nei nomi definitivi previsti dall'architettura.
+    # 4. RINOMINA CORRETTA: Troviamo i file veri e li mettiamo a posto
     s3 = boto3.client('s3', region_name=AWS_REGION)
     for folder, final_name in [("train/", f"{dataset_name}_train.csv"), ("test/", f"{dataset_name}_test.csv")]:
-        res = s3.list_objects_v2(Bucket=TARGET_BUCKET, Prefix=f"data/processed/{dataset_name}/.athena_temp/{folder}")
+        res = s3.list_objects_v2(Bucket=TARGET_BUCKET, Prefix=f"{prefix_temp}{folder}")
         if 'Contents' in res:
             for obj in res['Contents']:
-                if obj['Key'].endswith('.csv'):
+                # I file generati da Athena spesso non hanno estensione. Ignoriamo solo i metadati.
+                if not obj['Key'].endswith('.metadata') and not obj['Key'].endswith('.manifest'):
+                    print(f" [PRE-PROCESSING] Rigenerazione e sovrascrittura di {final_name} in corso...")
                     s3.copy_object(
                         CopySource={'Bucket': TARGET_BUCKET, 'Key': obj['Key']}, 
                         Bucket=TARGET_BUCKET, 
                         Key=f"data/processed/{dataset_name}/{final_name}"
                     )
-                # Pulizia disco (elimina i file metadata e i csv originali con nome sporco)
-                s3.delete_object(Bucket=TARGET_BUCKET, Key=obj['Key'])
-                
-    print(f" [PRE-PROCESSING] Split completato! Nuovi file '{dataset_name}_train.csv' e '_test.csv' pronti all'uso.")
+                    break # Trovato e copiato il file dati principale
+                    
+    # 5. PULIZIA DEFINITIVA: Cancelliamo tutta la spazzatura generata da Athena
+    print(" [PRE-PROCESSING] Pulizia profonda di S3 in corso...")
+    pulisci_cartella_s3(TARGET_BUCKET, prefix_temp)
+    # Svuotiamo anche la cartella di default di Athena per tenere il bucket immacolato
+    pulisci_cartella_s3(TARGET_BUCKET, "athena_results/")
+            
+    print(f" [PRE-PROCESSING] Operazione completata! File '{dataset_name}_train.csv' e '_test.csv' pronti all'uso.")
 
 def generate_initial_training_tasks(job_data):
     config = load_config()
