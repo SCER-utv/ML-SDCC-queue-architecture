@@ -11,6 +11,7 @@
     "train_response": "https://sqs.us-east-1.amazonaws.com/248593862537/train-response-queue",
     "infer_task": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-task-queue",
     "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue"
+    "sqs_message_group": "ML_Jobs"
   },
 
   "split_ratios": {
