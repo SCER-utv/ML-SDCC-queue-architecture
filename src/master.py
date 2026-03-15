@@ -563,7 +563,7 @@ def main():
                     if not tasks_dispatched:
                         try:
                             # vvvvvvv COMMENTARE QUESTA RIGA PER SALTARE LO SPLIT vvvvvvv
-                            esegui_split_streaming(dataset)
+                            # esegui_split_streaming(dataset)
                             pass 
                         except Exception as e:
                             print(f" [ERRORE FATALE] Impossibile completare lo split con Athena: {e}")
