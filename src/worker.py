@@ -189,20 +189,25 @@ def main():
     print(" Worker Node Avviato e pronto a ricevere ordini...")
 
     while True:
+        # Teniamo traccia del messaggio corrente per la gestione degli errori
+        current_queue = None
+        current_receipt = None
+        
         try:
-            # ==========================================
             # PRIORITÀ 1: TRAINING
-            # ==========================================
             res_train = sqs_client.receive_message(
                 QueueUrl=TRAIN_TASK_QUEUE, MaxNumberOfMessages=1, WaitTimeSeconds=5
             )
 
             if 'Messages' in res_train:
                 msg = res_train['Messages'][0]
+                current_queue = TRAIN_TASK_QUEUE
+                current_receipt = msg['ReceiptHandle']
+                
                 train_task_data = json.loads(msg['Body'])
 
                 # Esegue il lavoro pesante
-                s3_model_uri = train(train_task_data, msg['ReceiptHandle'])
+                s3_model_uri = train(train_task_data, current_receipt)
 
                 # Risponde al Master
                 train_resp = {
@@ -213,14 +218,13 @@ def main():
                 sqs_client.send_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MessageBody=json.dumps(train_resp))
 
                 # CANCELLA IL MESSAGGIO SOLO DOPO IL SUCCESSO (Fault Tolerance)
-                sqs_client.delete_message(QueueUrl=TRAIN_TASK_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                sqs_client.delete_message(QueueUrl=TRAIN_TASK_QUEUE, ReceiptHandle=current_receipt)
                 print(f" Training {train_task_data['task_id']} completato con successo!\n")
 
-                continue  # FONDAMENTALE: Torna su e ricontrolla la coda di training!
+                # FONDAMENTALE: Torna su e ricontrolla la coda di training!
+                continue 
 
-            # ==========================================
             # PRIORITÀ 2: INFERENZA
-            # ==========================================
             # Ci arriva SOLO se la coda di training non ha restituito messaggi.
             res_infer = sqs_client.receive_message(
                 QueueUrl=INFER_TASK_QUEUE, MaxNumberOfMessages=1, WaitTimeSeconds=5
@@ -228,10 +232,13 @@ def main():
 
             if 'Messages' in res_infer:
                 msg = res_infer['Messages'][0]
+                current_queue = INFER_TASK_QUEUE
+                current_receipt = msg['ReceiptHandle']
+                
                 infer_task_data = json.loads(msg['Body'])
 
                 # Esegue il lavoro pesante
-                s3_voti_uri = esegui_inferenza(infer_task_data, msg['ReceiptHandle'])
+                s3_voti_uri = esegui_inferenza(infer_task_data, current_receipt)
 
                 # Risponde al Master
                 risposta = {
@@ -242,22 +249,32 @@ def main():
                 sqs_client.send_message(QueueUrl=INFER_RESPONSE_QUEUE, MessageBody=json.dumps(risposta))
 
                 # CANCELLA IL MESSAGGIO SOLO DOPO IL SUCCESSO
-                sqs_client.delete_message(QueueUrl=INFER_TASK_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
+                sqs_client.delete_message(QueueUrl=INFER_TASK_QUEUE, ReceiptHandle=current_receipt)
                 print(f" Inferenza {infer_task_data['task_id']} completata con successo!\n")
                 
                 continue  # Ricomincia il ciclo
 
-            # ==========================================
-            # RIPOSO
-            # ==========================================
-            # Se entrambe le code sono vuote, respira un secondo per non intasare le API AWS
+            # Se entrambe le code sono vuote, respira 2 secondi per non intasare le API AWS
             time.sleep(2)
 
         except Exception as e:
-            # Se esplode per RAM o errori vari, catturiamo l'eccezione in modo che il
-            # demone Worker non muoia, ma NON cancelliamo il messaggio dalla coda!
-            # Così il Visibility Timeout scadrà e il messaggio tornerà disponibile.
-            print(f" Errore durante l'elaborazione del task: {e}")
+            
+            # GESTIONE MORTE LENTA / OOM
+            print(f" \n[FAULT TOLERANCE] Rilevato errore critico nel Worker: {e}")
+            
+            # Se abbiamo un messaggio "in mano", lo rigettiamo istantaneamente nella coda
+            if current_queue and current_receipt:
+                try:
+                    print(" [FAULT TOLERANCE] Eseguo Rilascio Immediato (VisibilityTimeout=0) per riassegnazione rapida...")
+                    sqs_client.change_message_visibility(
+                        QueueUrl=current_queue,
+                        ReceiptHandle=current_receipt,
+                        VisibilityTimeout=0
+                    )
+                except Exception as inner_e:
+                    print(f" [FAULT TOLERANCE] Impossibile rilasciare il messaggio (forse già scaduto): {inner_e}")
+            
+            # Riposo per evitare loop di riavvio se l'errore è infrastrutturale
             time.sleep(10)
 
 
