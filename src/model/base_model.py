@@ -5,7 +5,7 @@ class BaseModel(ABC):
     def process_and_train(self, df, params):
         pass
 
-    # Metodo standardizzato per l'inferenza"""
+    # Metodo standardizzato per l'inferenza
     @abstractmethod
     def process_and_predict(self, rf_model, df):
         pass
