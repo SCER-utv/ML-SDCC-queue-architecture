@@ -140,6 +140,11 @@ def _get_total_rows_s3_select(bucket, key):
 
 # Commentare quando abbiamo bisogno di effettuare i testing
 """ def esegui_split_streaming(dataset_name):
+    # --- LETTURA PARAMETRI DINAMICA DA CONFIG ---
+    ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
+    train_threshold = ratios.get("train", 0.70)
+    val_threshold = train_threshold + ratios.get("val", 0.15)
+    
     print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/15/15) per '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
@@ -174,15 +179,18 @@ def _get_total_rows_s3_select(bucket, key):
             for line in streaming_sicuro:
                 if line.strip(): 
                     r = random.random()
-                    if r <= 0.70:            # 70% Train
+                    # SOGLIA DINAMICA TRAINING SET
+                    if r <= train_threshold:         
                         f_train.write(line)
                         righe['train'] += 1
-                    elif r <= 0.85:          # 15% Validation (da 0.70 a 0.85)
+                    # <-- SOGLIA DINAMICA VALIDATION SET
+                    elif r <= val_threshold:        
                         f_val.write(line)
                         righe['val'] += 1
-                    else:                    # 15% Test (da 0.85 a 1.0)
-                        f_test.write(line)
-                        righe['test'] += 1
+                    # SOGLIA DINAMICA TEST/HOLDOUT
+                    else:                            
+                        f_holdout.write(line)
+                        righe['holdout'] += 1
                         
         print(f" [PRE-PROCESSING] Split terminato. Train: {righe['train']} | Val: {righe['val']} | Test: {righe['test']}")
         
@@ -199,6 +207,11 @@ def _get_total_rows_s3_select(bucket, key):
         if os.path.exists(local_test): os.remove(local_test) """
 
 def esegui_split_streaming(dataset_name):
+
+    # --- LETTURA PARAMETRI DINAMICA DA CONFIG ---
+    ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
+    train_threshold = ratios.get("train", 0.70)
+    
     print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (Streaming 70/30) per '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
@@ -232,10 +245,12 @@ def esegui_split_streaming(dataset_name):
             for line in streaming_sicuro:
                 # Assicuriamoci che la riga non sia vuota
                 if line.strip(): 
-                    if random.random() <= 0.70:
+                    # SOGLIA DINAMICA TRAINING SET
+                    if random.random() <= train_threshold: 
                         f_train.write(line)
                         righe_train += 1
-                    else:
+                    # SOGLIA DINAMICA TEST SET    
+                    else:                                  
                         f_test.write(line)
                         righe_test += 1
                         
