@@ -280,7 +280,8 @@ def generate_initial_training_tasks(job_data):
     trees_per_worker = math.floor(num_trees_total / num_workers)
     trees_remainder = num_trees_total % num_workers
 
-    percorso_strategie = "config/worker_strategies.json"
+    root_dir = config.get('_root_dir', '.')
+    percorso_strategie = os.path.join(root_dir, 'config', 'worker_strategies.json')
     try:
         with open(percorso_strategie, 'r') as f:
             all_strategies = json.load(f)
