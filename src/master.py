@@ -559,6 +559,24 @@ def main():
                     # 2. PROVISIONING (Idempotente)
                     scale_worker_infrastructure(num_workers)
 
+                    # =========================================================
+                    #  BLOCCO PLUGGABILE: DATA SPLIT DINAMICO
+                    # Per disabilitare lo split durante i test di Fault Tolerance, 
+                    # commentare la riga 'esegui_split_athena(dataset)' 
+                    # =========================================================
+                    if not tasks_dispatched:
+                        try:
+                            # vvvvvvv COMMENTARE QUESTA RIGA PER SALTARE LO SPLIT vvvvvvv
+                            esegui_split_athena(dataset)
+                            pass 
+                        except Exception as e:
+                            print(f" [ERRORE FATALE] Impossibile completare lo split con Athena: {e}")
+                            scale_worker_infrastructure(0) # Spegne le macchine
+                            continue 
+                    else:
+                        print(" [RECOVERY] Split dinamico già gestito prima del crash.")
+                    # =========================================================
+
                     # 3. FAN-OUT SICURO (Evita duplicati SQS)
                     if not tasks_dispatched:
                         generate_initial_training_tasks(job_data)
