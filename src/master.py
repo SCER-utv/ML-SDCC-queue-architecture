@@ -29,6 +29,12 @@ INFER_RESPONSE_QUEUE = config["sqs_queues"]["infer_response"]
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
 
+# CLIENT Athena
+athena_client = boto3.client('athena', region_name=AWS_REGION)
+ATHENA_DB = config.get("athena_config", {}).get("database", "drf_datasets")
+
+TARGET_BUCKET = config.get("s3_bucket")
+
 # ==========================================
 # FUNZIONI DI SUPPORTO
 # ==========================================
@@ -134,6 +140,64 @@ def _get_total_rows_s3_select(bucket, key):
         print(f"[ERRORE S3 Select]: {e}")
         raise e
 
+
+def esegui_split_athena(dataset_name):
+    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/30) con AWS Athena per '{dataset_name}'...")
+    
+    source_table = f"{dataset_name}_optimized"
+    train_table = f"{dataset_name}_train_temp"
+    test_table = f"{dataset_name}_test_temp"
+    
+    # Cartelle temporanee per i risultati di Athena
+    base_out = f"s3://{TARGET_BUCKET}/data/processed/{dataset_name}/.athena_temp/"
+    
+    # 1. Pulizia tabelle precedenti
+    for t in [train_table, test_table]:
+        athena_client.start_query_execution(
+            QueryString=f"DROP TABLE IF EXISTS {t};",
+            QueryExecutionContext={'Database': ATHENA_DB},
+            ResultConfiguration={'OutputLocation': base_out}
+        )
+    time.sleep(3) # Pausa per sincronizzazione AWS
+    
+    # 2. Creazione Train (70%) e Test (30%)
+    query_train = f"CREATE TABLE {train_table} WITH (format='CSV', external_location='{base_out}train/') AS SELECT * FROM {source_table} WHERE rand() <= 0.70;"
+    query_test = f"CREATE TABLE {test_table} WITH (format='CSV', external_location='{base_out}test/') AS SELECT * FROM {source_table} EXCEPT SELECT * FROM {train_table};"
+    
+    for q in [query_train, query_test]:
+        resp = athena_client.start_query_execution(
+            QueryString=q,
+            QueryExecutionContext={'Database': ATHENA_DB},
+            ResultConfiguration={'OutputLocation': base_out + "logs/"}
+        )
+        
+        # Polling: Attendiamo che Athena finisca di calcolare
+        while True:
+            status = athena_client.get_query_execution(QueryExecutionId=resp['QueryExecutionId'])
+            state = status['QueryExecution']['Status']['State']
+            if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
+                if state == 'FAILED':
+                    raise Exception(f"Errore AWS Athena: {status['QueryExecution']['Status']['StateChangeReason']}")
+                break
+            time.sleep(2)
+            
+    # 3. RINOMINA E SPOSTAMENTO DEI FILE:
+    # Athena genera file con nomi casuali. Li rinominiamo nei nomi definitivi previsti dall'architettura.
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    for folder, final_name in [("train/", f"{dataset_name}_train.csv"), ("test/", f"{dataset_name}_test.csv")]:
+        res = s3.list_objects_v2(Bucket=TARGET_BUCKET, Prefix=f"data/processed/{dataset_name}/.athena_temp/{folder}")
+        if 'Contents' in res:
+            for obj in res['Contents']:
+                if obj['Key'].endswith('.csv'):
+                    s3.copy_object(
+                        CopySource={'Bucket': TARGET_BUCKET, 'Key': obj['Key']}, 
+                        Bucket=TARGET_BUCKET, 
+                        Key=f"data/processed/{dataset_name}/{final_name}"
+                    )
+                # Pulizia disco (elimina i file metadata e i csv originali con nome sporco)
+                s3.delete_object(Bucket=TARGET_BUCKET, Key=obj['Key'])
+                
+    print(f" [PRE-PROCESSING] Split completato! Nuovi file '{dataset_name}_train.csv' e '_test.csv' pronti all'uso.")
 
 def generate_initial_training_tasks(job_data):
     config = load_config()
