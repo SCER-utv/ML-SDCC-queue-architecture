@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
+import random 
 
 # ==========================================
 # CONFIGURAZIONE DINAMICA DA JSON
@@ -28,10 +29,6 @@ INFER_RESPONSE_QUEUE = config["sqs_queues"]["infer_response"]
 
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
-
-# CLIENT Athena
-athena_client = boto3.client('athena', region_name=AWS_REGION)
-ATHENA_DB = config.get("athena_config", {}).get("database", "drf_datasets")
 
 TARGET_BUCKET = config.get("s3_bucket")
 
@@ -139,82 +136,57 @@ def _get_total_rows_s3_select(bucket, key):
     except Exception as e:
         print(f"[ERRORE S3 Select]: {e}")
         raise e
-
-# Elimina ricorsivamente tutto il contenuto di una cartella S3 per non lasciare spazzatura.
-def pulisci_cartella_s3(bucket, prefix):
-    s3 = boto3.client('s3', region_name=AWS_REGION)
-    paginator = s3.get_paginator('list_objects_v2')
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        if 'Contents' in page:
-            for obj in page['Contents']:
-                s3.delete_object(Bucket=bucket, Key=obj['Key'])
-
-def esegui_split_athena(dataset_name):
-    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/30) con AWS Athena per '{dataset_name}'...")
-    
-    source_table = f"{dataset_name}_optimized"
-    train_table = f"{dataset_name}_train_temp"
-    test_table = f"{dataset_name}_test_temp"
-    
-    # Definiamo i percorsi senza s3:// per le API di Boto3, e con s3:// per Athena
-    prefix_temp = f"data/processed/{dataset_name}/.athena_temp/"
-    base_out = f"s3://{TARGET_BUCKET}/{prefix_temp}"
-    
-    # 1. PULIZIA PREVENTIVA (Svuota la temp in caso di vecchi crash)
-    pulisci_cartella_s3(TARGET_BUCKET, prefix_temp)
-    
-    # 2. DROP DELLE TABELLE SE ESISTONO
-    for t in [train_table, test_table]:
-        athena_client.start_query_execution(
-            QueryString=f"DROP TABLE IF EXISTS {t};",
-            QueryExecutionContext={'Database': ATHENA_DB},
-            ResultConfiguration={'OutputLocation': base_out + "logs/"} # Indirizza i log nella temp!
-        )
-    time.sleep(2) 
-    
-    # 3. CREAZIONE TRAIN (70%) E TEST (30%)
-    query_train = f"CREATE TABLE {train_table} WITH (format='CSV', external_location='{base_out}train/') AS SELECT * FROM {source_table} WHERE rand() <= 0.70;"
-    query_test = f"CREATE TABLE {test_table} WITH (format='CSV', external_location='{base_out}test/') AS SELECT * FROM {source_table} EXCEPT SELECT * FROM {train_table};"
-    
-    for q in [query_train, query_test]:
-        resp = athena_client.start_query_execution(
-            QueryString=q,
-            QueryExecutionContext={'Database': ATHENA_DB},
-            ResultConfiguration={'OutputLocation': base_out + "logs/"} # Mette i risultati testuali qui
-        )
         
-        # Polling: Attendiamo che Athena finisca di calcolare
-        while True:
-            status = athena_client.get_query_execution(QueryExecutionId=resp['QueryExecutionId'])
-            state = status['QueryExecution']['Status']['State']
-            if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
-                if state == 'FAILED':
-                    raise Exception(f"Errore AWS Athena: {status['QueryExecution']['Status']['StateChangeReason']}")
-                break
-            time.sleep(2)
-            
-    # 4. RINOMINA CORRETTA: Troviamo i file veri e li mettiamo a posto
+
+def esegui_split_streaming(dataset_name):
+    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (Streaming 70/30) per '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
-    for folder, final_name in [("train/", f"{dataset_name}_train.csv"), ("test/", f"{dataset_name}_test.csv")]:
-        res = s3.list_objects_v2(Bucket=TARGET_BUCKET, Prefix=f"{prefix_temp}{folder}")
-        if 'Contents' in res:
-            for obj in res['Contents']:
-                # I file generati da Athena spesso non hanno estensione. Ignoriamo solo i metadati.
-                if not obj['Key'].endswith('.metadata') and not obj['Key'].endswith('.manifest'):
-                    print(f" [PRE-PROCESSING] Rigenerazione e sovrascrittura di {final_name} in corso...")
-                    s3.copy_object(
-                        CopySource={'Bucket': TARGET_BUCKET, 'Key': obj['Key']}, 
-                        Bucket=TARGET_BUCKET, 
-                        Key=f"data/processed/{dataset_name}/{final_name}"
-                    )
-                    break # Trovato e copiato il file dati principale
-                    
-    # 5. PULIZIA DEFINITIVA: Cancelliamo tutta la spazzatura generata da Athena
-    print(" [PRE-PROCESSING] Pulizia profonda di S3 in corso...")
-    pulisci_cartella_s3(TARGET_BUCKET, prefix_temp)
-    # Svuotiamo anche la cartella di default di Athena per tenere il bucket immacolato
-    pulisci_cartella_s3(TARGET_BUCKET, "athena_results/")
+    bucket = config.get("s3_bucket")
+    
+    # Percorsi su S3
+    source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
+    train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
+    test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
+    
+    # Percorsi nel disco fisso locale del Master Node (l'EC2 ha almeno 8GB di disco libero)
+    local_train = f"/tmp/{dataset_name}_train.csv"
+    local_test = f"/tmp/{dataset_name}_test.csv"
+    
+    try:
+        print(f" [PRE-PROCESSING] Lettura in Streaming da S3 (Zero-RAM mode) in corso...")
+        # 1. Chiediamo ad AWS di aprirci un "Tubo" verso il file gigante, senza scaricarlo
+        response = s3.get_object(Bucket=bucket, Key=source_key)
+        
+        # 2. Apriamo i due file di destinazione sul disco del Master
+        with open(local_train, 'wb') as f_train, open(local_test, 'wb') as f_test:
             
+            # Leggiamo la primissima riga (L'header delle colonne) e la scriviamo su entrambi i file!
+            header = response['Body'].readline()
+            f_train.write(header)
+            f_test.write(header)
+            
+            # 3. Ora "frulliamo" il resto del file riga per riga.
+            # Questo ciclo usa letteralmente pochi KiloByte di RAM!
+            for line in response['Body']:
+                if random.random() <= 0.70:
+                    f_train.write(line)
+                else:
+                    f_test.write(line)
+                    
+        print(" [PRE-PROCESSING] Split completato sul disco locale. Eseguo l'upload su S3...")
+        
+        # 4. Carichiamo i due file unici e perfetti su S3 (sovrascrivendo quelli vecchi)
+        s3.upload_file(local_train, bucket, train_key)
+        s3.upload_file(local_test, bucket, test_key)
+        
+    except Exception as e:
+        print(f" [ERRORE PRE-PROCESSING] Fallimento durante lo split: {e}")
+        raise e
+    finally:
+        # 5. FONDAMENTALE: Puliamo il disco del Master per non intasarlo ai prossimi job!
+        if os.path.exists(local_train): os.remove(local_train)
+        if os.path.exists(local_test): os.remove(local_test)
+        
     print(f" [PRE-PROCESSING] Operazione completata! File '{dataset_name}_train.csv' e '_test.csv' pronti all'uso.")
 
 def generate_initial_training_tasks(job_data):
@@ -585,7 +557,7 @@ def main():
                     if not tasks_dispatched:
                         try:
                             # vvvvvvv COMMENTARE QUESTA RIGA PER SALTARE LO SPLIT vvvvvvv
-                            esegui_split_athena(dataset)
+                            esegui_split_streaming(dataset)
                             pass 
                         except Exception as e:
                             print(f" [ERRORE FATALE] Impossibile completare lo split con Athena: {e}")
