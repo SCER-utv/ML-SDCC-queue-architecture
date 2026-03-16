@@ -18,7 +18,7 @@ AWS_REGION = config.get("aws_region")
 
 # GRIGLIA DEGLI IPERPARAMETRI (Modifica questi array prima di avviare)
 DATASET_TO_TEST = "airlines"          
-WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8]  # Raddoppio dei nodi per misurare lo Speedup
+WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8, 9]  # Raddoppio dei nodi per misurare lo Speedup
 TREES_TO_TEST   = [5, 10, 25, 50, 100, 200, 400]  # Raddoppio del cari
 # =====================================================================
 
