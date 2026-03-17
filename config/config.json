@@ -29,6 +29,10 @@
     "airlines": {
       "target": "Label",
       "type": "classification"
+    },
+    "emasmerda": {
+      "target": "Label",
+      "type": "classification"
     }
   }
 }
