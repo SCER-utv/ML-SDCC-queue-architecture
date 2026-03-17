@@ -6,6 +6,7 @@ import threading
 import pandas as pd
 import numpy as np
 import joblib
+import gc
 from sklearn.ensemble import RandomForestClassifier
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
@@ -118,7 +119,10 @@ def train(train_task_data, receipt_handle):
 # ==========================================
 # CORE LOGIC: INFERENZA
 # ==========================================
-def esegui_inferenza(infer_task_data, receipt_handle): 
+# ==========================================
+# CORE LOGIC: INFERENZA
+# ==========================================
+def esegui_inferenza(infer_task_data, receipt_handle):
     job_id = infer_task_data['job_id']
     task_id = infer_task_data['task_id']
     model_s3_uri = infer_task_data['model_s3_uri']
@@ -126,8 +130,8 @@ def esegui_inferenza(infer_task_data, receipt_handle):
     # --- INIZIO HEARTBEAT ---
     stop_event = threading.Event()
     heartbeat_thread = threading.Thread(
-        target=extend_sqs_visibility, 
-        args=(INFER_TASK_QUEUE, receipt_handle, stop_event) # <--- Usa INFER_TASK_QUEUE
+        target=extend_sqs_visibility,
+        args=(INFER_TASK_QUEUE, receipt_handle, stop_event)
     )
     heartbeat_thread.start()
     # ------------------------
@@ -144,27 +148,39 @@ def esegui_inferenza(infer_task_data, receipt_handle):
         # CASO 1: INFERENZA SU SINGOLA TUPLA (Real-time)
         if 'tuple_data' in infer_task_data:
             print(f" [INFER] Predizione su singola tupla in corso...")
-            # Formattiamo i dati per sklearn (1 riga, N colonne)
             dati = np.array(infer_task_data['tuple_data']).reshape(1, -1)
-            
-            # Usiamo direttamente la predizione del modello scikit-learn
             all_pred = [float(tree.predict(dati)[0]) for tree in rf.estimators_]
             os.remove(local_model_path)
-            # Non salviamo nulla su S3, ritorniamo il dizionario direttamente al Master!
             return {"tipo": "singolo", "valore": all_pred}
 
-        # CASO 2: INFERENZA BULK DA S3 (Test set per metriche classiche)
+        # CASO 2: INFERENZA BULK DA S3 (A BLOCCHI PER SALVARE RAM)
         else:
-            print(f" [INFER] Inferenza su Dataset Intero in corso...")
+            print(f" [INFER] Inferenza su Dataset Intero (A BLOCCHI) in corso...")
             test_dataset_uri = infer_task_data['test_dataset_uri']
-            df_test = pd.read_csv(test_dataset_uri)
-            
             ml_handler = ModelFactory.get_model(dataset_name=infer_task_data['dataset'])
-            
-            print(f"   -> Calcolo previsioni in corso...")
+
+            print(f"   -> Calcolo previsioni in corso (Chunksize: 500k)...")
             start_time = time.time()
-            risultati_numpy = ml_handler.process_and_predict(rf, df_test)
-            print(f"   -> Previsioni completate in {time.time() - start_time:.2f} secondi.")
+
+            tutte_le_predizioni = []
+
+            chunksize = 500000
+
+            # --- LA MAGIA DEL CHUNKING ---
+            for chunk in pd.read_csv(test_dataset_uri, chunksize=chunksize, low_memory=False):
+                # Predizione solo sul blocco corrente
+                risultati_chunk = ml_handler.process_and_predict(rf, chunk)
+                tutte_le_predizioni.append(risultati_chunk)
+
+                # Svuotiamo la RAM in modo aggressivo
+                del chunk, risultati_chunk
+                gc.collect()
+
+            # Uniamo i risultati parziali in un unico array Numpy
+            risultati_numpy = np.concatenate(tutte_le_predizioni)
+            print(
+                f"   -> Previsioni completate in {time.time() - start_time:.2f} secondi. Generate {len(risultati_numpy)} righe.")
+            # -----------------------------
 
             # SALVATAGGIO IN .NPY COMPRESSO E UPLOAD
             local_npy_path = f"/tmp/results_{job_id}_{task_id}.npy"
@@ -179,6 +195,7 @@ def esegui_inferenza(infer_task_data, receipt_handle):
             return {"tipo": "bulk", "valore": f"s3://{bucket}/{s3_voti_key}"}
 
     finally:
+        # Questo garantisce che il thread si chiuda sempre, anche in caso di crash
         stop_event.set()
         heartbeat_thread.join()
 
