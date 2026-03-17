@@ -174,12 +174,10 @@ def main():
     print(" Invio richiesta al Master Node in corso...")
     
     try:
-        msg_group = config.get("sqs_message_group", "ML_Jobs")
-
         sqs_client.send_message(
             QueueUrl=CLIENT_QUEUE_URL,
             MessageBody=json.dumps(payload),
-            MessageGroupId=msg_group, # <-- Usa la variabile
+            MessageGroupId="ML_Jobs",
             MessageDeduplicationId=payload['job_id']
         )
         print(f" SUCCESS! Il messaggio è stato accodato con successo.")
