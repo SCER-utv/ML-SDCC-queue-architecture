@@ -204,7 +204,9 @@ def _get_total_rows_s3_select(bucket, key):
     finally:
         if os.path.exists(local_train): os.remove(local_train)
         if os.path.exists(local_val): os.remove(local_val)
-        if os.path.exists(local_test): os.remove(local_test) """
+        if os.path.exists(local_test): os.remove(local_test) 
+
+    return righe['train'] """
 
 def esegui_split_streaming(dataset_name):
 
@@ -268,8 +270,10 @@ def esegui_split_streaming(dataset_name):
         if os.path.exists(local_test): os.remove(local_test)
         
     print(f" [PRE-PROCESSING] Operazione completata con successo!")
+    
+    return righe_train
 
-def generate_initial_training_tasks(job_data):
+def generate_initial_training_tasks(job_data, total_rows=None):
     config = load_config()
     num_workers = job_data['num_workers']
     num_trees_total = job_data['num_trees']
@@ -281,13 +285,14 @@ def generate_initial_training_tasks(job_data):
     train_s3_key = config['datasets_metadata'][dataset]['train_path']
     train_s3_uri = f"s3://{target_bucket}/{train_s3_key}"
 
-
-    # 1. Conta il numero di righe all'interno del dataset (fatto per garantire generalità per ogni dataset)
-    try:
-        total_rows = _get_total_rows_s3_select(target_bucket, train_s3_key)
-    except Exception:
-        print("Fallimento critico S3 Select. Esco.")
-        return
+    # 1. Conta il numero di righe: Usa il parametro passato OPPURE fa la query S3
+    if total_rows is None:
+        try:
+            print(" [INFO] Calcolo righe mancante in cache. Avvio S3 Select...")
+            total_rows = _get_total_rows_s3_select(target_bucket, train_s3_key)
+        except Exception:
+            print("Fallimento critico S3 Select. Esco.")
+            return
 
     rows_per_worker = total_rows // num_workers
     remainder_rows = total_rows % num_workers
@@ -639,28 +644,34 @@ def main():
                     # Per disabilitare lo split durante i test di Fault Tolerance, 
                     # commentare la riga 'esegui_split_athena(dataset)' 
                     # =========================================================
+                    # Prepariamo la variabile per contenere il conteggio
+                    righe_train_calcolate = None 
+
                     if not tasks_dispatched:
-                        try:
-                            # vvvvvvv COMMENTARE QUESTA RIGA PER SALTARE LO SPLIT vvvvvvv
-                            # esegui_split_streaming(dataset)
-                            pass 
-                        except Exception as e:
-                            print(f" [ERRORE FATALE] Impossibile completare lo split con Athena: {e}")
-                            scale_worker_infrastructure(0) # Spegne le macchine
-                            continue 
+                        if job_data.get('dynamic_split', False): # Controlla se il Client vuole lo split
+                            try:
+                                print(f" [INFO] Esecuzione Split Richiesta dal Client...")
+                                # CATTURA IL RISULTATO!
+                                righe_train_calcolate = esegui_split_streaming(dataset) 
+                            except Exception as e:
+                                print(f" [ERRORE FATALE] Impossibile completare lo split: {e}")
+                                scale_worker_infrastructure(0) 
+                                continue 
+                        else:
+                            print(" [INFO] Split bypassato. Uso file esistenti su S3.")
                     else:
                         print(" [RECOVERY] Split dinamico già gestito prima del crash.")
                     # =========================================================
 
-                    # 3. FAN-OUT SICURO (Evita duplicati SQS)
+                    # 3. FAN-OUT SICURO
                     if not tasks_dispatched:
-                        generate_initial_training_tasks(job_data)
-                        tasks_dispatched = True # Chiudiamo il lucchetto!
+                        # PASSA LA VARIABILE ALLA FUNZIONE!
+                        generate_initial_training_tasks(job_data, total_rows=righe_train_calcolate) 
+                        
+                        tasks_dispatched = True
                         update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
                     else:
-                        print(" [RECOVERY] Task già in coda SQS prima del crash. Salto il Fan-Out (No Duplicati).")
-        
-                    print("\n [EVENT LOOP] Master in ascolto attivo delle risposte...\n")
+                        print(" [RECOVERY] Task già in coda SQS prima del crash. Salto il Fan-Out.")
         
                     start_infer = start_train # Fallback per sicurezza temporale
 
