@@ -63,38 +63,39 @@ def train(train_task_data, receipt_handle):
     # --- INIZIO HEARTBEAT ---
     stop_event = threading.Event()
     heartbeat_thread = threading.Thread(
-        target=extend_sqs_visibility, 
+        target=extend_sqs_visibility,
         args=(TRAIN_TASK_QUEUE, receipt_handle, stop_event)
     )
     heartbeat_thread.start()
     # ------------------------
 
-    print(f" [TRAIN] Avvio {task_id}. Lettura di {train_task_data['num_rows']} righe da S3...")
+    # METTIAMO IL TRY QUI! TUTTO IL RESTO VA DENTRO IL TRY.
+    try:
+        print(f" [TRAIN] Avvio {task_id}. Lettura di {train_task_data['num_rows']} righe da S3...")
 
-    # 1. LETTURA PARZIALE DA S3 (Zero-Waste RAM)
-    # Calcoliamo le righe da saltare preservando l'header (riga 0 del CSV)
-    skip_rows = train_task_data['skip_rows']
-    if skip_rows > 0:
-        # Salta le righe dalla 1 fino a skip_rows (mantiene la 0 che è l'intestazione)
-        rows_to_skip = range(1, skip_rows + 1)
-    else:
-        rows_to_skip = None
+        # 1. LETTURA PARZIALE DA S3 (Zero-Waste RAM)
+        skip_rows = train_task_data['skip_rows']
+        if skip_rows > 0:
+            rows_to_skip = range(1, skip_rows + 1)
+        else:
+            rows_to_skip = None
 
-    df = pd.read_csv(
-        dataset_uri,
-        skiprows=rows_to_skip,
-        nrows=train_task_data['num_rows']
-    )
+        df = pd.read_csv(
+            dataset_uri,
+            skiprows=rows_to_skip,
+            nrows=train_task_data['num_rows']
+        )
 
-    ml_handler = ModelFactory.get_model(dataset_name=train_task_data['dataset'])
+        ml_handler = ModelFactory.get_model(dataset_name=train_task_data['dataset'])
 
-    print("avvio timer")
-    start_time = time.time()
-    print("timer avviato")
-    rf = ml_handler.process_and_train(df, train_task_data)
-    print(f"   -> [job id:{job_id}, task id: {task_id}] Training completato in {time.time() - start_time:.2f}s")
+        print("avvio timer")
+        start_time = time.time()
+        print("timer avviato")
 
-    try: 
+        # 2. TRAINING
+        rf = ml_handler.process_and_train(df, train_task_data)
+        print(f"   -> [job id:{job_id}, task id: {task_id}] Training completato in {time.time() - start_time:.2f}s")
+
         # 3. SALVATAGGIO E UPLOAD
         local_model_path = f"/tmp/{task_id}_{job_id}.joblib"
         joblib.dump(rf, local_model_path)
@@ -111,14 +112,11 @@ def train(train_task_data, receipt_handle):
 
     finally:
         # --- FINE HEARTBEAT ---
-        # Qualsiasi cosa succeda (successo o errore), fermiamo il thread dell'Heartbeat
+        # Ora il thread si spegnerà SEMPRE, anche se pandas esplode!
         stop_event.set()
         heartbeat_thread.join()
 
 
-# ==========================================
-# CORE LOGIC: INFERENZA
-# ==========================================
 # ==========================================
 # CORE LOGIC: INFERENZA
 # ==========================================
