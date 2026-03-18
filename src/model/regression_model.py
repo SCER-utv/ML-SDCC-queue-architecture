@@ -1,3 +1,4 @@
+import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 
 from src.model.base_model import BaseModel
@@ -27,7 +28,16 @@ class RegressionModel(BaseModel):
         """Restituisce un array 1D con la media esatta calcolata dalla foresta locale."""
         X = df.drop(columns=[self.target_column])
 
+        # --- LA PULIZIA DEFINITIVA E RISOLUZIONE DEL WARNING ---
+        # Convertiamo Pandas in un Array Numpy puro (Risolve il Warning "X has feature names")
+        X_array = X.to_numpy(dtype=np.float32)
+
+        # nan_to_num distrugge Inf, -Inf, valori fuori scala e NaN, mettendo tutto a 0.0
+        # (Risolve l'Errore Critico "infinity or a value too large")
+        X_clean = np.nan_to_num(X_array, nan=0.0, posinf=0.0, neginf=0.0)
+        # -------------------------------------------------------
+
         # Nella regressione, la predict standard restituisce già la media degli alberi!
-        medie = rf_model.predict(X)
+        medie = rf_model.predict(X_clean)
 
         return medie

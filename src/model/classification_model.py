@@ -29,9 +29,18 @@ class ClassificationModel(BaseModel):
         """Restituisce una matrice (N_righe, 2_colonne) con i voti [Voti_0, Voti_1]"""
         X = df.drop(columns=[self.target_column])
 
+        # --- LA PULIZIA DEFINITIVA E RISOLUZIONE DEL WARNING ---
+        # Convertiamo Pandas in un Array Numpy puro (Risolve il Warning "X has feature names")
+        X_array = X.to_numpy(dtype=np.float32)
+
+        # nan_to_num distrugge Inf, -Inf, valori fuori scala e NaN, mettendo tutto a 0.0
+        # (Risolve l'Errore Critico "infinity or a value too large")
+        X_clean = np.nan_to_num(X_array, nan=0.0, posinf=0.0, neginf=0.0)
+        # -------------------------------------------------------
+
         # 1. Facciamo votare ogni singolo albero (restituisce matrice: n_alberi x n_righe)
         # rf_model.estimators_ è la lista di tutti gli alberi addestrati in questo Worker
-        tutte_le_previsioni = np.array([albero.predict(X) for albero in rf_model.estimators_])
+        tutte_le_previsioni = np.array([albero.predict(X_clean) for albero in rf_model.estimators_])
 
         # 2. Contiamo quanti alberi hanno votato 0 e quanti hanno votato 1 per ogni riga
         voti_0 = np.sum(tutte_le_previsioni == 0, axis=0)
