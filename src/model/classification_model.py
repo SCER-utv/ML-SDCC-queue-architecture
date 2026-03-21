@@ -1,4 +1,3 @@
-# --- TASK CLASSIFICAZIONE ---
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
@@ -11,7 +10,7 @@ class ClassificationModel(BaseModel):
         self.task_type = 'classification'
 
     def process_and_train(self, df, params):
-        print(f"   -> Addestramento {params['trees']} alberi. (Depth: {params['max_depth']})(Max features: {params['max_features']})(Criterion: {params['criterion']})")
+        print(f" Training {params['trees']} trees. (Depth: {params['max_depth']} | Max features: {params['max_features']} | Criterion: {params['criterion']})")
         X = df.drop(columns=[self.target_column])
         y = df[self.target_column]
 
@@ -25,28 +24,27 @@ class ClassificationModel(BaseModel):
         rf.fit(X, y)
         return rf
 
+    # Gathers predictions from individual trees for majority voting aggregation and returns a 2D array of shape containing vote counts
     def process_and_predict(self, rf_model, df):
-        """Restituisce una matrice (N_righe, 2_colonne) con i voti [Voti_0, Voti_1]"""
+
         X = df.drop(columns=[self.target_column])
 
-        # --- LA PULIZIA DEFINITIVA E RISOLUZIONE DEL WARNING ---
-        # Convertiamo Pandas in un Array Numpy puro (Risolve il Warning "X has feature names")
+        # Convert to pure Numpy array to avoid sklearn "X has feature names" warning
         X_array = X.to_numpy(dtype=np.float32)
 
-        # nan_to_num distrugge Inf, -Inf, valori fuori scala e NaN, mettendo tutto a 0.0
-        # (Risolve l'Errore Critico "infinity or a value too large")
+        """VA FATTO NEL NOTEBOOK"""
+        # Sanitize inputs: replace Inf, -Inf, and NaN with 0.0 to prevent crash during predict
         X_clean = np.nan_to_num(X_array, nan=0.0, posinf=0.0, neginf=0.0)
-        # -------------------------------------------------------
 
-        # 1. Facciamo votare ogni singolo albero (restituisce matrice: n_alberi x n_righe)
-        # rf_model.estimators_ è la lista di tutti gli alberi addestrati in questo Worker
-        tutte_le_previsioni = np.array([albero.predict(X_clean) for albero in rf_model.estimators_])
+        # 1. Collect predictions from each individual tree
+        all_predictions = np.array([tree.predict(X_clean) for tree in rf_model.estimators_])
 
-        # 2. Contiamo quanti alberi hanno votato 0 e quanti hanno votato 1 per ogni riga
-        voti_0 = np.sum(tutte_le_previsioni == 0, axis=0)
-        voti_1 = np.sum(tutte_le_previsioni == 1, axis=0)
+        # 2. Count votes for class 0 and class 1
+        votes_0 = np.sum(all_predictions == 0, axis=0)
+        votes_1 = np.sum(all_predictions == 1, axis=0)
 
-        # 3. Uniamo i due array in una matrice a due colonne (Simile al CSV che chiedevi)
-        matrice_voti = np.column_stack((voti_0, voti_1))
+        # 3. Stack arrays into a 2D matrix
+        votes_matrix = np.column_stack((votes_0, votes_1))
 
-        return matrice_voti
+        return votes_matrix
+        
