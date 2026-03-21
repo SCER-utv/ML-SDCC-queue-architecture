@@ -3,6 +3,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from src.model.base_model import BaseModel
 
+
 class ClassificationModel(BaseModel):
     def __init__(self, target_column):
         self.target_column = target_column
