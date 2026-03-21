@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+
 # Abstract base class for all Machine Learning models in the distributed system.
 class BaseModel(ABC):
 
