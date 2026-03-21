@@ -115,9 +115,9 @@ def scale_worker_infrastructure(num_workers):
     else:
         print(" [ASG CRITICAL] No instances provided by ASG within timeout!")
 
-# [NUOVO METODO ZERO-COPY] Interroga S3 senza scaricare il file
-def _get_total_rows_s3_select(bucket, key):
-    print(f" [S3 Select] Lancio query SQL 'SELECT count(*)' su s3://{bucket}/{key}...")
+# Executes an S3 Select query to quickly count rows in a CSV without downloading it. It will be executed when the split is not done.
+def get_total_rows_s3_select(bucket, key):
+    print(f" [S3-SELECT] Executing 'SELECT count(*)' on s3://{bucket}/{key}...")
     s3 = boto3.client('s3')
     try:
         resp = s3.select_object_content(
@@ -133,86 +133,79 @@ def _get_total_rows_s3_select(bucket, key):
                 return total_rows
         return 0
     except Exception as e:
-        print(f"[ERRORE S3 Select]: {e}")
+        print(f" [S3-SELECT ERROR] Failed query: {e}")
         raise e
 
-# Commentare quando abbiamo bisogno di effettuare i testing
-""" def esegui_split_streaming(dataset_name):
-    # --- LETTURA PARAMETRI DINAMICA DA CONFIG ---
+# Uncomment this 3-way split block if a fixed Test set is required for Grid Search testing
+""" 
+def execute_streaming_split(dataset_name):
     ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
     train_threshold = ratios.get("train", 0.70)
     val_threshold = train_threshold + ratios.get("val", 0.15)
     
-    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (70/15/15) per '{dataset_name}'...")
+    print(f" [SPLIT] Starting 3-way dynamic streaming split for '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
     
     source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
-    
-    # 3 File di Destinazione su S3
     train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
     val_key = f"data/processed/{dataset_name}/{dataset_name}_val.csv"
     test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
     
-    # 3 File Locali
     local_train = f"/tmp/{dataset_name}_train.csv"
     local_val = f"/tmp/{dataset_name}_val.csv"
     local_test = f"/tmp/{dataset_name}_test.csv"
     
     try:
         response = s3.get_object(Bucket=bucket, Key=source_key)
-        streaming_sicuro = io.TextIOWrapper(response['Body'], encoding='utf-8')
+        safe_streaming = io.TextIOWrapper(response['Body'], encoding='utf-8')
         
         with open(local_train, 'w', encoding='utf-8') as f_train, \
              open(local_val, 'w', encoding='utf-8') as f_val, \
              open(local_test, 'w', encoding='utf-8') as f_test:
             
-            header = streaming_sicuro.readline()
+            header = safe_streaming.readline()
             f_train.write(header)
             f_val.write(header)
             f_test.write(header)
             
-            righe = {'train': 0, 'val': 0, 'test': 0}
+            rows = {'train': 0, 'val': 0, 'test': 0}
             
-            for line in streaming_sicuro:
+            for line in safe_streaming:
                 if line.strip(): 
                     r = random.random()
-                    # SOGLIA DINAMICA TRAINING SET
                     if r <= train_threshold:         
                         f_train.write(line)
-                        righe['train'] += 1
-                    # <-- SOGLIA DINAMICA VALIDATION SET
+                        rows['train'] += 1
                     elif r <= val_threshold:        
                         f_val.write(line)
-                        righe['val'] += 1
-                    # SOGLIA DINAMICA TEST/HOLDOUT
+                        rows['val'] += 1
                     else:                            
-                        f_holdout.write(line)
-                        righe['holdout'] += 1
+                        f_test.write(line)
+                        rows['test'] += 1
                         
-        print(f" [PRE-PROCESSING] Split terminato. Train: {righe['train']} | Val: {righe['val']} | Test: {righe['test']}")
-        
+        print(f" [SPLIT] Finished. Train: {rows['train']} | Val: {rows['val']} | Test: {rows['test']}")
         s3.upload_file(local_train, bucket, train_key)
         s3.upload_file(local_val, bucket, val_key)
         s3.upload_file(local_test, bucket, test_key)
         
     except Exception as e:
-        print(f" [ERRORE PRE-PROCESSING] Fallimento durante lo split: {e}")
+        print(f" [SPLIT ERROR] Failed during streaming split: {e}")
         raise e
     finally:
         if os.path.exists(local_train): os.remove(local_train)
         if os.path.exists(local_val): os.remove(local_val)
         if os.path.exists(local_test): os.remove(local_test) 
 
-    return righe['train'] """
+    return rows['train'] 
+"""
 
-def esegui_split_streaming(dataset_name):
-
-    # --- LETTURA PARAMETRI DINAMICA DA CONFIG ---
+# Downloads dataset via S3 and randomly splits it into Train and Test set, then uploads them back to S3.
+def execute_streaming_split(dataset_name):
     ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
     train_threshold = ratios.get("train", 0.70)
     
-    print(f" [PRE-PROCESSING] Avvio Data-Split dinamico (Streaming 70/30) per '{dataset_name}'...")
+    print(f" [SPLIT] Starting 2-way dynamic streaming split for '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
     
@@ -224,53 +217,49 @@ def esegui_split_streaming(dataset_name):
     local_test = f"/tmp/{dataset_name}_test.csv"
     
     try:
-        print(f" [PRE-PROCESSING] Lettura intelligente in Streaming (riga per riga) in corso...")
+        print(f" [SPLIT] Line-by-line streaming in progress...")
         response = s3.get_object(Bucket=bucket, Key=source_key)
         
-        # 1. Il TRUCCO: Avvolgiamo lo streaming grezzo (Body) in un TextIOWrapper 
-        # che capisce l'Encoding UTF-8 e sa riconoscere dove finisce veramente una riga (\n)
-        streaming_sicuro = io.TextIOWrapper(response['Body'], encoding='utf-8')
+        # We wrap the raw stream (Body) in a TextIOWrapper that understands UTF-8 encoding and can correctly detect where a line actually ends (\n).
+        safe_streaming = io.TextIOWrapper(response['Body'], encoding='utf-8')
         
         with open(local_train, 'w', encoding='utf-8') as f_train, open(local_test, 'w', encoding='utf-8') as f_test:
             
-            # Leggiamo l'header in modo pulito
-            header = streaming_sicuro.readline()
+            # Read the header cleanly
+            header = safe_streaming.readline()
             f_train.write(header)
             f_test.write(header)
             
-            # 2. Iteriamo in sicurezza
-            righe_train = 0
-            righe_test = 0
+            # Iterate
+            train_rows = 0
+            test_rows = 0
             
-            for line in streaming_sicuro:
-                # Assicuriamoci che la riga non sia vuota
+            for line in safe_streaming:
                 if line.strip(): 
-                    # SOGLIA DINAMICA TRAINING SET
                     if random.random() <= train_threshold: 
                         f_train.write(line)
-                        righe_train += 1
-                    # SOGLIA DINAMICA TEST SET    
+                        train_rows += 1
                     else:                                  
                         f_test.write(line)
-                        righe_test += 1
+                        test_rows += 1
                         
-        print(f" [PRE-PROCESSING] Split terminato. Train: {righe_train} righe | Test: {righe_test} righe.")
-        print(" [PRE-PROCESSING] Eseguo l'upload su S3...")
+        print(f" [SPLIT] Finished. Train: {train_rows} rows | Test: {test_rows} rows.")
+        print(" [SPLIT] Uploading to S3...")
         
         s3.upload_file(local_train, bucket, train_key)
         s3.upload_file(local_test, bucket, test_key)
         
     except Exception as e:
-        print(f" [ERRORE PRE-PROCESSING] Fallimento durante lo split: {e}")
+        print(f" [SPLIT ERROR] Failed during streaming split: {e}")
         raise e
     finally:
         if os.path.exists(local_train): os.remove(local_train)
         if os.path.exists(local_test): os.remove(local_test)
         
-    print(f" [PRE-PROCESSING] Operazione completata con successo!")
-    
-    return righe_train
+    print(f" [SPLIT] Operation completed successfully.")
+    return train_rows
 
+# Calculates dataset splits based on total rows and generates SQS payloads for worker nodes.
 def generate_initial_training_tasks(job_data, total_rows=None):
     config = load_config()
     num_workers = job_data['num_workers']
@@ -283,13 +272,13 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     train_s3_key = config['datasets_metadata'][dataset]['train_path']
     train_s3_uri = f"s3://{target_bucket}/{train_s3_key}"
 
-    # 1. Conta il numero di righe: Usa il parametro passato OPPURE fa la query S3
+    # 1. Count the number of rows: Use the provided parameter or perform an S3 query.
     if total_rows is None:
         try:
-            print(" [INFO] Calcolo righe mancante in cache. Avvio S3 Select...")
-            total_rows = _get_total_rows_s3_select(target_bucket, train_s3_key)
+            print(" [INFO] Total rows missing in cache. Triggering S3 Select fallback...")
+            total_rows = get_total_rows_s3_select(target_bucket, train_s3_key)
         except Exception:
-            print("Fallimento critico S3 Select. Esco.")
+            print(" [INFO CRITICAL] S3 Select fallback failed. Aborting.")
             return
 
     rows_per_worker = total_rows // num_workers
@@ -299,37 +288,36 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     trees_remainder = num_trees_total % num_workers
 
     root_dir = config.get('_root_dir', '.')
-    percorso_strategie = os.path.join(root_dir, 'config', 'worker_strategies.json')
+    strategies_path = os.path.join(root_dir, 'config', 'worker_strategies.json')
+    
     try:
-        with open(percorso_strategie, 'r') as f:
+        with open(strategies_path, 'r') as f:
             all_strategies = json.load(f)
     except FileNotFoundError:
-        print(f" ERRORE CRITICO: Impossibile trovare il file {percorso_strategie}!")
+        print(f" [INFO ERROR] Missing strategies file: {strategies_path}")
         all_strategies = {}
 
-        # 2. Capiamo se il dataset è classificazione o regressione
+    # 2. Determine whether the dataet is for classification or regression
     ml_handler = ModelFactory.get_model(dataset)
     task_type = getattr(ml_handler, 'task_type', 'classification')
 
-    # 3. Estrazione sicura (zero crash)
+    # 3. Safe extraction (zero crashes)
     str_num = str(num_workers)
-    blocco_task = all_strategies.get(task_type, {})
-    lista_strategie_corretta = blocco_task.get(str_num, [])
+    task_block = all_strategies.get(task_type, {})
+    target_strategies = task_block.get(str_num, [])
 
-    # 4. Rete di sicurezza (Fallback)
-    if not lista_strategie_corretta:
-        print(f" ATTENZIONE: Nessuna configurazione esatta per {task_type} con {num_workers} worker. Uso il default.")
-        lista_strategie_corretta = [{"max_depth": "None", "max_features": "sqrt", "criterion": "gini"}]
+    if not target_strategies:
+        print(f" [INFO WARNING] No strict strategy found for {task_type} with {num_workers} workers. Using default.")
+        target_strategies = [{"max_depth": "None", "max_features": "sqrt", "criterion": "gini"}]
     current_skip = 0
 
-    print(f" [FAN-OUT] Suddivisione {num_trees_total} alberi in {num_workers} task di training...")
+    print(f" [INFO] Distributing {num_trees_total} trees across {num_workers} training tasks...")
     for i in range(num_workers):
         trees = trees_per_worker + (1 if i < trees_remainder else 0)
         n_rows = rows_per_worker + (remainder_rows if i == num_workers - 1 else 0)
-        conf = lista_strategie_corretta[i % len(lista_strategie_corretta)]
+        conf = target_strategies[i % len(target_strategies)]
 
         raw_depth = conf['max_depth']
-
         if(raw_depth == "None"):
             max_depth = None
         else:
@@ -338,26 +326,20 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             except (ValueError, TypeError):
                 max_depth = None
 
-
         raw_features = conf['max_features']
         if raw_features in ["sqrt", "log2"]:
-            max_features = raw_features  # Va bene così, è una stringa valida per sklearn
+            max_features = raw_features  
         elif raw_features in ["None", "null", None]:
             max_features = None
         else:
             try:
-                # Prova a convertirlo in numero (es. la stringa "0.2" diventa il float 0.2)
                 val_float = float(raw_features)
-
-                # Se è un numero intero tondo (es. 10.0), scikit-learn preferisce l'intero (10)
                 if val_float.is_integer():
                     max_features = int(val_float)
                 else:
-                    max_features = val_float  # È una frazione, es. 0.2 o 0.3
+                    max_features = val_float  
             except (ValueError, TypeError):
-                # Fallback di sicurezza se arriva roba incomprensibile
                 max_features = "sqrt"
-
 
         task_payload = {
             "job_id": job_id,
@@ -375,7 +357,7 @@ def generate_initial_training_tasks(job_data, total_rows=None):
 
         current_skip += n_rows
         sqs_client.send_message(QueueUrl=TRAIN_TASK_QUEUE, MessageBody=json.dumps(task_payload))
-        print(f"   -> Inviato {task_payload['task_id']} ({trees} alberi) in coda di addestramento.")
+        print(f" Enqueued {task_payload['task_id']} ({trees} trees).")
 
 
 def generate_inference_tasks(job_id, train_resp, dataset):
