@@ -32,7 +32,7 @@ class RegressionModel(BaseModel):
         # Convert to pure Numpy array to avoid sklearn "X has feature names" warning
         X_array = X.to_numpy(dtype=np.float32)
 
-        # VA FATTO NEL NOTEBOOK
+        """VA FATTO NEL NOTEBOOK"""
         # Sanitize inputs: replace Inf, -Inf, and NaN with 0.0 to prevent crash during predict
         X_clean = np.nan_to_num(X_array, nan=0.0, posinf=0.0, neginf=0.0)
 
