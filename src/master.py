@@ -1,26 +1,29 @@
-import boto3
+import io
 import json
 import math
 import os
-import time
-import io
+import random
 import threading
+import time
+
+import boto3
 import botocore
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error
+
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
-import random 
-import io
+
 
 # ==========================================
-# CONFIGURAZIONE DINAMICA DA JSON
+# DYNAMIC CONFIGURATION
 # ==========================================
 config = load_config()
 
 AWS_REGION = config.get("aws_region")
 ASG_NAME = config.get("asg_name")
+TARGET_BUCKET = config.get("s3_bucket")
 
 CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
 TRAIN_TASK_QUEUE = config["sqs_queues"]["train_task"]
@@ -31,39 +34,36 @@ INFER_RESPONSE_QUEUE = config["sqs_queues"]["infer_response"]
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 asg_client = boto3.client('autoscaling', region_name=AWS_REGION)
 
-TARGET_BUCKET = config.get("s3_bucket")
 
 # ==========================================
-# FUNZIONI DI SUPPORTO
+# UTILITY FUNCTIONS
 # ==========================================
 
-def conta_parti_modello(bucket, dataset, target_model):
+# Counts and retrieves S3 URIs of distributed model chunks
+def count_model_parts(bucket, dataset, target_model):
     s3 = boto3.client('s3', region_name=AWS_REGION)
     prefix = f"models/{dataset}/{target_model}/"
     resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
-    # Ritorna la lista degli URI completi dei file .joblib
     return [f"s3://{bucket}/{obj['Key']}" for obj in resp.get('Contents', []) if obj['Key'].endswith('.joblib')]
     
-# Thread in background che allunga la vita del messaggio del Client
+# Background thread to periodically extend SQS message visibility timeout
 def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
-    
     while not stop_event.is_set():
-        # Dorme 2 minuti.
         stop_event.wait(120) 
         if not stop_event.is_set():
             try:
-                # Estende il timeout di altri 5 minuti (300 secondi)
                 sqs_client.change_message_visibility(
                     QueueUrl=queue_url,
                     ReceiptHandle=receipt_handle,
                     VisibilityTimeout=300 
                 )
-                print(" [MASTER HEARTBEAT] Timeout del Job esteso di 5 minuti.")
+                print(" [HEARTBEAT] Master job timeout extended by 5 minutes.")
             except Exception as e:
-                pass # Se dà errore, probabilmente è già stato cancellato
-                
+                pass 
+
+# Scales the Auto Scaling Group to the desired number of instances and updates their tags.
 def scale_worker_infrastructure(num_workers):
-    print(f" [ASG] Imposto la capacità desiderata a {num_workers} Worker...")
+    print(f" [ASG] Setting desired capacity to {num_workers} workers...")
     asg_client.update_auto_scaling_group(
         AutoScalingGroupName=ASG_NAME, MinSize=0, DesiredCapacity=num_workers, MaxSize=10
     )
@@ -71,51 +71,49 @@ def scale_worker_infrastructure(num_workers):
     if num_workers == 0:
         return
         
-    print(f" [ASG] Attendo l'avvio delle istanze per rinominarle (DRF-worker1...)...")
+    print(f" [ASG] Waiting for instances to start for tagging...")
     ec2_client = boto3.client('ec2', region_name=AWS_REGION)
     
-    max_attesa = 24 # 24 * 5 sec = 2 minuti massimi di attesa
-    istanze_trovate = []
+    max_attesa = 24 # 24 * 5 sec = 120 seconds max
+    found_instances = []
     
     for _ in range(max_attesa):
         time.sleep(5)
-        risposta = ec2_client.describe_instances(
+        response = ec2_client.describe_instances(
             Filters=[
                 {'Name': 'tag:aws:autoscaling:groupName', 'Values': [ASG_NAME]},
                 {'Name': 'instance-state-name', 'Values': ['pending', 'running']}
             ]
         )
         
-        istanze_trovate = []
-        for reservation in risposta.get('Reservations', []):
+        for reservation in response.get('Reservations', []):
             for inst in reservation.get('Instances', []):
-                istanze_trovate.append(inst['InstanceId'])
+                found_instances.append(inst['InstanceId'])
                 
-        # Se abbiamo raggiunto il target, interrompiamo l'attesa!
-        if len(istanze_trovate) >= num_workers:
+        # If we have reached the target, we stop waiting
+        if len(found_instances) >= num_workers:
             break
             
-    # Alla fine del tempo (o se abbiamo finito prima), rinominiamo TUTTO quello che abbiamo trovato!
-    # Questo gestisce il caso in cui AWS ci dà meno macchine del previsto.
-    if len(istanze_trovate) > 0:
-        if len(istanze_trovate) < num_workers:
-            print(f" [ATTENZIONE AWS] Richiesti {num_workers} Worker, ma AWS ne ha forniti solo {len(istanze_trovate)}. Procedo in modalità degradata.")
+    # At the end of the time (or if we finish earlier), we rename everything we have found
+    # This handles also the case where AWS gives us fewer machines than expected.
+    if len(found_instances) > 0:
+        if len(found_instances) < num_workers:
+            print(f" [ASG WARN] Requested {num_workers} workers, but AWS provided {len(found_instances)}. Proceeding degraded.")
         else:
-            print(f" Trovate {len(istanze_trovate)} istanze. Applicazione dei nomi in corso...")
+            print(f" [ASG] Found {len(found_instances)} instances. Applying name tags...")
             
-        for i, instance_id in enumerate(istanze_trovate):
-            nome_worker = f"DRF-worker{i+1}"
+        for i, instance_id in enumerate(found_instances):
+            worker_name = f"DRF-worker{i+1}"
             try:
                 ec2_client.create_tags(
                     Resources=[instance_id],
-                    Tags=[{'Key': 'Name', 'Value': nome_worker}]
+                    Tags=[{'Key': 'Name', 'Value': worker_name}]
                 )
-            except Exception as e:
-                pass # Ignora errori temporanei sui tag
-        print(" Nomi applicati con successo su EC2!")
+            except Exception:
+                pass 
+        print(" [ASG] Name tags applied successfully.")
     else:
-        print(" [ERRORE CRITICO AWS] Nessuna istanza fornita dall'Auto Scaling Group in 2 minuti!")
-
+        print(" [ASG CRITICAL] No instances provided by ASG within timeout!")
 
 # [NUOVO METODO ZERO-COPY] Interroga S3 senza scaricare il file
 def _get_total_rows_s3_select(bucket, key):
