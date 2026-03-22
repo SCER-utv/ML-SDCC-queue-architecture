@@ -61,6 +61,7 @@ def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
             except Exception as e:
                 pass 
 
+
 # Scales the Auto Scaling Group to the desired number of instances and updates their tags.
 def scale_worker_infrastructure(num_workers):
     print(f" [ASG] Setting desired capacity to {num_workers} workers...")
@@ -95,7 +96,7 @@ def scale_worker_infrastructure(num_workers):
             break
             
     # At the end of the time (or if we finish earlier), we rename everything we have found
-    # This handles also the case where AWS gives us fewer machines than expected.
+    # This handles also the case where AWS gives us fewer machines than expected
     if len(found_instances) > 0:
         if len(found_instances) < num_workers:
             print(f" [ASG WARN] Requested {num_workers} workers, but AWS provided {len(found_instances)}. Proceeding degraded.")
@@ -114,6 +115,7 @@ def scale_worker_infrastructure(num_workers):
         print(" [ASG] Name tags applied successfully.")
     else:
         print(" [ASG CRITICAL] No instances provided by ASG within timeout!")
+
 
 # Executes an S3 Select query to quickly count rows in a CSV without downloading it. It will be executed when the split is not done.
 def get_total_rows_s3_select(bucket, key):
@@ -135,6 +137,7 @@ def get_total_rows_s3_select(bucket, key):
     except Exception as e:
         print(f" [S3-SELECT ERROR] Failed query: {e}")
         raise e
+
 
 # Uncomment this 3-way split block if a fixed Test set is required for Grid Search testing
 """ 
@@ -200,6 +203,7 @@ def execute_streaming_split(dataset_name):
     return rows['train'] 
 """
 
+
 # Downloads dataset via S3 and randomly splits it into Train and Test set, then uploads them back to S3.
 def execute_streaming_split(dataset_name):
     ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
@@ -258,6 +262,7 @@ def execute_streaming_split(dataset_name):
         
     print(f" [SPLIT] Operation completed successfully.")
     return train_rows
+
 
 # Calculates dataset splits based on total rows and generates SQS payloads for worker nodes.
 def generate_initial_training_tasks(job_data, total_rows=None):
@@ -360,16 +365,15 @@ def generate_initial_training_tasks(job_data, total_rows=None):
         print(f" Enqueued {task_payload['task_id']} ({trees} trees).")
 
 
+# Enqueues inference tasks mapped to completed training chunks
 def generate_inference_tasks(job_id, train_resp, dataset):
     task_id = train_resp['task_id']
     model_s3_uri = train_resp['s3_model_uri']
 
     config = load_config()
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    
     test_s3_key = config['datasets_metadata'][dataset]['test_path']
     test_s3_uri = f"s3://{target_bucket}/{test_s3_key}"
-
 
     infer_task = {
         "job_id": job_id,
@@ -379,23 +383,20 @@ def generate_inference_tasks(job_id, train_resp, dataset):
         "model_s3_uri": model_s3_uri  
     }
     sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
-    print(f" [INFERENZA DISPACCIATA] Task {task_id} inviato alla coda di inferenza!")
+    print(f" [INFER DISPATCH] Task {task_id} sent to inference queue.")
 
-
+# Parses S3 URI into bucket and object key
 def parse_s3_uri(s3_uri):
     parts = s3_uri.replace("s3://", "").split("/", 1)
     return parts[0], parts[1]
 
 
-# SALVATAGGIO METRICHE SU S3
+# Appends final job metrics to a persistent S3 CSV file
 def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
     s3_client = boto3.client('s3', region_name=AWS_REGION)
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    
-    # Percorso dinamico del file CSV dei risultati su S3
     s3_key = f"results/{dataset}/{dataset}_results.csv"
     
-    # Creiamo il dataframe con la nuova riga di risultati
     new_row_df = pd.DataFrame([{
         'Dataset': dataset, 
         'Workers': n_workers, 
@@ -407,29 +408,31 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
     }])
 
     try:
-        # Tenta di scaricare il CSV esistente da S3
+        # Attempt to download the existing CSV from S3.
         obj = s3_client.get_object(Bucket=target_bucket, Key=s3_key)
         df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()))
-        # Se esiste, accoda la nuova riga (APPEND continuo)
+        # If it exists, append the new row 
         df_final = pd.concat([df_existing, new_row_df], ignore_index=True)
         
     except botocore.exceptions.ClientError as e:
-        # Se il file non esiste (errore 404 NoSuchKey), il file finale sarà solo la nuova riga
+        # If the file does not exist, the final file will contain only the new row
         if e.response['Error']['Code'] == 'NoSuchKey':
             df_final = new_row_df
         else:
-            print(f"!! Errore imprevisto di S3 durante il salvataggio: {e}")
+            print(f" [METRICS ERROR] Unexpected S3 error: {e}")
             return
             
-    # Salva il file aggiornato sovrascrivendolo su S3
+    # Save the updated file by overwriting it on S3
     csv_buffer = io.StringIO()
     df_final.to_csv(csv_buffer, index=False)
     s3_client.put_object(Bucket=target_bucket, Key=s3_key, Body=csv_buffer.getvalue())
-    print(f" [METRICHE] Risultati accodati permanentemente in: s3://{target_bucket}/{s3_key}")
+    print(f" [METRICS] Results securely appended to: s3://{target_bucket}/{s3_key}")
 
-def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, trees, weights, train_time, infer_time):
+
+# Downloads partial inferences, executes majority vote/averaging, and calculates global metrics.
+def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_workers, trees, weights, train_time, infer_time):
     print("\n" + "=" * 50)
-    print(" FASE DI AGGREGAZIONE E VALUTAZIONE FINALE")
+    print(" FINAL AGGREGATION & EVALUATION PHASE")
     print("=" * 50)
 
     ml_handler = ModelFactory.get_model(dataset_name)
@@ -438,78 +441,68 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
     s3 = boto3.client('s3')
     config = load_config()
 
-    # 1. SCARICA TUTTI I FILE .NPY DAI WORKER
-    voti_list = []
-    print(f" Scaricamento di {len(risultati_inferenza_s3)} file di risultati da S3...")
+    # 1. Download all the .npy files from the workers
+    predictions_list = []
+    print(f" Downloading {len(s3_inference_results)} inference result files from S3...")
 
     for task_id, s3_uri in risultati_inferenza_s3.items():
         bucket, key = parse_s3_uri(s3_uri)
         local_path = f"/tmp/res_{task_id}.npy"
         s3.download_file(bucket, key, local_path)
 
-        # Carica in memoria e aggiungi alla lista
-        array_risultato = np.load(local_path)
-        voti_list.append(array_risultato)
+        result_array = np.load(local_path)
+        predictions_list.append(result_array)
         os.remove(local_path)
 
-    # 2. SCARICA LA GROUND TRUTH (I valori reali dal test set)
+    # 2. Downloads the real values from the test set
     target_col = ml_handler.target_column
     test_s3_key = config['datasets_metadata'][dataset_name]['test_path']
     test_s3_uri = f"s3://{config.get('s3_bucket')}/{test_s3_key}"
 
-    print(f" Lettura dei valori reali (Ground Truth) dalla colonna '{target_col}'...")
+    print(f" Reading Ground Truth from column '{target_col}'...")
     df_test = pd.read_csv(test_s3_uri, usecols=[target_col])
     y_true = df_test[target_col].values
 
-    # 3. LA MAGIA DELL'AGGREGAZIONE
-    forma_dati = voti_list[0].shape
-
-    if len(forma_dati) == 2:
-        # ---------------------------------------------------------
-        # CLASSIFICAZIONE (La shape è N_righe x 2_colonne)
-        # ---------------------------------------------------------
-        print(" Rilevato task di Classificazione. Eseguo il conteggio dei voti...")
-
-        totale_voti = np.sum(voti_list, axis=0)
-        voti_0 = totale_voti[:, 0]
-        voti_1 = totale_voti[:, 1]
-        y_prob = voti_1 / (voti_0 + voti_1)
-        y_pred_class = np.argmax(totale_voti, axis=1)
+    # 3. Aggregation
+    data_shape = predictions_list[0].shape
+    
+    if len(data_shape) == 2:
+        # CLASSIFICATION (The shape is N_rows * 2_columns)
+        print(" [EVALUATION] Classification task detected. Executing Majority Voting...")
+        total_votes = np.sum(predictions_list, axis=0)
+        votes_0 = total_votes[:, 0]
+        votes_1 = total_votes[:, 1]
+        
+        y_prob = votes_1 / (votes_0 + votes_1)
+        final_prediction = np.argmax(total_votes, axis=1)
 
         auc = roc_auc_score(y_true, y_prob)
-        acc = accuracy_score(y_true, y_pred_class)
+        acc = accuracy_score(y_true, final_prediction)
 
-        print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
-        print(f"   -> ROC-AUC:   {auc:.4f}")
-        print(f"   -> Accuracy:  {acc:.4f}")
-        
-        # Dizionario metriche da salvare
+        print(f"\n GLOBAL DISTRIBUTED RESULTS:")
+        print(f" ROC-AUC: {auc:.4f}")
+        print(f" Accuracy: {acc:.4f}")
         metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
 
     else:
-        # ---------------------------------------------------------
-        # REGRESSIONE (La shape è N_righe array 1D)
-        # ---------------------------------------------------------
-        print(" Rilevato task di Regressione. Calcolo la media globale...")
-
-        y_pred = np.average(voti_list, axis=0, weights=weights)
+        # REGRESSION (The shape is N_rows)
+        print(" [EVALUATION] Regression task detected. Executing Weighted Averaging...")
+        y_pred = np.average(predictions_list, axis=0, weights=weights)
 
         mse = mean_squared_error(y_true, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_true, y_pred)
-        mae = mean_absolute_error(y_true, y_pred) # <--- NUOVO CALCOLO MAE
+        mae = mean_absolute_error(y_true, y_pred) 
 
-        print(f"\n RISULTATI GLOBALI (Random Forest Distribuita):")
-        print(f" -> RMSE:      {rmse:.4f}")
-        print(f" -> MAE:       {mae:.4f}") # <--- NUOVA STAMPA MAE
-        print(f" -> R2 Score:  {r2:.4f}")
-        
-        # Dizionario metriche da salvare con MAE aggiunto
+        print(f"\n GLOBAL DISTRIBUTED RESULTS:")
+        print(f" RMSE: {rmse:.4f}")
+        print(f" MAE: {mae:.4f}") 
+        print(f" R2 Score: {r2:.4f}")
         metrics_dict = {'RMSE': round(rmse, 4), 'MAE': round(mae, 4), 'R2 Score': round(r2, 4)}
 
     print("=" * 50 + "\n")
 
-    # 4. SALVATAGGIO FINALE SU S3 (Spostato qui in fondo, quando le metriche esistono!)
+    # 4. Save on S3
     save_metrics(
         dataset=dataset_name, 
         n_workers=num_workers, 
@@ -522,7 +515,7 @@ def aggrega_e_valuta(job_id, dataset_name, risultati_inferenza_s3, num_workers, 
     )
 
 
-# --- AGGIORNATO: Ora salva e recupera il tempo di inizio ---
+# Retrieves current job status from DynamoDB for fault tolerance recovery
 def get_job_state(job_id):
     config = load_config() 
     table_name = config.get("dynamodb_table", "JobStatus")
@@ -533,185 +526,185 @@ def get_job_state(job_id):
         if 'Item' in response:
             start_time = float(response['Item'].get('start_time'))
             tasks_dispatched = response['Item'].get('tasks_dispatched', False)
-            tempo_training = float(response['Item'].get('tempo_training', 0.0))
-            tempo_inferenza = float(response['Item'].get('tempo_inferenza', 0.0))
+            
+            # Note: DynamoDB Schema keys remain mapped to Italian labels to preserve backward compatibility
+            training_time = float(response['Item'].get('tempo_training', 0.0))
+            inference_time = float(response['Item'].get('tempo_inferenza', 0.0))
+            
             return (set(response['Item'].get('completed_train', [])), 
                     response['Item'].get('completed_infer', {}), 
-                    start_time, tasks_dispatched, tempo_training, tempo_inferenza)
+                    start_time, tasks_dispatched, training_time, inference_time)
     except Exception:
         pass
-    # Ritorna None come start_time se il job è completamente nuovo
-    return set(), {}, None, False, 0.0, 0.0 
+    return set(), {}, None, False, 0.0, 0.0
 
-def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time, tasks_dispatched, tempo_training=0.0, tempo_inferenza=0.0):
+
+# Upserts current job progress into DynamoDB
+def update_job_state(job_id, completed_train_set, completed_infer_dict, start_time, tasks_dispatched, training_time=0.0, inference_time=0.0):
     config = load_config() 
     table_name = config.get("dynamodb_table", "JobStatus")
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
     table = dynamodb.Table(table_name)
+
+    # Note: DynamoDB Schema keys remain mapped to Italian labels to preserve backward compatibility
     table.put_item(Item={
         'job_id': job_id,
         'completed_train': list(completed_train_set),
         'completed_infer': completed_infer_dict,
         'start_time': str(start_time),
         'tasks_dispatched': tasks_dispatched,
-        'tempo_training': str(tempo_training),
-        'tempo_inferenza': str(tempo_inferenza)
+        'tempo_training': str(training_time),
+        'tempo_inferenza': str(inference_time)
     })
 
 # ==========================================
-# CICLO PRINCIPALE DEL MASTER (EVENT LOOP REATTIVO)
+# MASTER EVENT LOOP
 # ==========================================
 def main():
-    print(" Master Node Avviato. In attesa del Client...")
+    print(" Master Node initialized. Waiting for Client jobs...")
 
     while True:
-        # 1. Attesa del comando dal Client
+        # 1. Wait the message from the client
         response = sqs_client.receive_message(QueueUrl=CLIENT_QUEUE_URL, MaxNumberOfMessages=1, WaitTimeSeconds=20)
 
         if 'Messages' in response:
             client_msg = response['Messages'][0]
-
             receipt_handle = client_msg['ReceiptHandle']
-            
             job_data = json.loads(client_msg['Body'])
 
-            # Estraiamo il Job ID parlante creato dal Client (es. job_taxi_200trees_...)
-            # Usiamo l'ID di SQS solo come "piano B" se per qualche motivo manca nel JSON
+            # 2. We extract the descriptive Job ID created by the client (e.g., job_taxi_200trees_...)
+            # We use the SQS ID only as a ‘fallback’ if, for some reason, it is missing from the JSON
             job_id = job_data.get('job_id', client_msg['MessageId'])
             job_data['job_id'] = job_id
             dataset = job_data['dataset']
-
             mode = job_data.get('mode', 'train')
 
             print(f"\n" + "=" * 50)
-            print(f" INIZIO PIPELINE ASINCRONA PER JOB: {job_id}")
+            print(f" INITIALIZING ASYNC PIPELINE FOR JOB: {job_id}")
             print("=" * 50)
 
-            # --- INIZIO HEARTBEAT DEL MASTER ---
+            # 3. Start heartbeat thread
             stop_event_master = threading.Event()
             heartbeat_thread_master = threading.Thread(
                 target=extend_client_sqs_visibility, 
                 args=(CLIENT_QUEUE_URL, receipt_handle, stop_event_master)
             )
             heartbeat_thread_master.start()
-            # -----------------------------------
 
+            # 4. Execution of the task
             try:
-                # RAMO A: TRAINING + TEST BULK
+                # BRANCH A: DISTRIBUTED TRAINING & BULK INFERENCE
                 if mode == 'train':
                     num_workers = job_data['num_workers']
         
-                    # 1. FASE DI RECOVERY DYNAMODB
-                    train_completati, risultati_inferenza_s3, start_train_db, tasks_dispatched, tempo_training, tempo_inferenza = get_job_state(job_id)
+                    # 1. State recovery
+                    completed_train_tasks, s3_inference_results, db_train_start_time, tasks_dispatched, training_time, inference_time = get_job_state(job_id)
                     
-                    if start_train_db is None:
-                        # JOB NUOVO: Fissa il timer nel DB per proteggersi dai crash pre-Fan-Out
-                        start_totale = time.time() 
+                    if db_train_start_time is None:
+                        # NEW JOB: Set the timer in the database to protect against pre–fan-out crashes
+                        total_start_time = time.time() 
                         start_train = time.time()
-                        update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, False, tempo_training, tempo_inferenza)
+                        update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, False, training_time, inference_time)    
                     else:
-                        # RECOVERY: Ripristina i timer dal database
-                        start_totale = start_train_db
-                        start_train = start_train_db
-                        print(f" [RECOVERY] Timer globale ripristinato dal Database!")
-                        print(f" [RECOVERY] Stato: {len(train_completati)} Train e {len(risultati_inferenza_s3)} Infer completati.")
+                        # RECOVERY: Restore timers from the database
+                        total_start_time = db_train_start_time
+                        start_train = db_train_start_time
+                        print(f" [RECOVERY] Global timers restored from Database.")
+                        print(f" [RECOVERY] Current state: {len(completed_train_tasks)} Train and {len(s3_inference_results)} Infer tasks complete.")
         
-                    # 2. PROVISIONING (Idempotente)
+                    # 2. PROVISIONING (Idempotent)
                     scale_worker_infrastructure(num_workers)
 
                     # =========================================================
-                    #  BLOCCO PLUGGABILE: DATA SPLIT DINAMICO
-                    # Per disabilitare lo split durante i test di Fault Tolerance, 
-                    # commentare la riga 'esegui_split_athena(dataset)' 
+                    # PLUGGABLE BLOCK: DYNAMIC DATA SPLIT
+                    # To disable splitting during Fault Tolerance tests,
+                    # comment out the line ‘esegui_split_athena(dataset)
                     # =========================================================
-                    # Prepariamo la variabile per contenere il conteggio
-                    righe_train_calcolate = None 
+
+                    # 3. Dynamic Data Split
+                    calculated_train_rows = None
 
                     if not tasks_dispatched:
-                        if job_data.get('dynamic_split', False): # Controlla se il Client vuole lo split
+                        if job_data.get('dynamic_split', False):
                             try:
-                                print(f" [INFO] Esecuzione Split Richiesta dal Client...")
-                                # CATTURA IL RISULTATO!
-                                righe_train_calcolate = esegui_split_streaming(dataset) 
+                                print(f" [PIPELINE] Client requested dataset streaming split...")
+                                calculated_train_rows = execute_streaming_split(dataset) 
                             except Exception as e:
-                                print(f" [ERRORE FATALE] Impossibile completare lo split: {e}")
+                                print(f" [CRITICAL] Split execution failed: {e}")
                                 scale_worker_infrastructure(0) 
                                 continue 
                         else:
-                            print(" [INFO] Split bypassato. Uso file esistenti su S3.")
+                            print(" [PIPELINE] Dataset split bypassed. Operating on cached S3 objects.")
                     else:
-                        print(" [RECOVERY] Split dinamico già gestito prima del crash.")
-                    # =========================================================
+                        print(" [RECOVERY] Split block skipped. Tasks already dispatched.")
 
-                    # 3. FAN-OUT SICURO
+                    # 4. SQS FAN-OUT
                     if not tasks_dispatched:
-                        # PASSA LA VARIABILE ALLA FUNZIONE!
-                        generate_initial_training_tasks(job_data, total_rows=righe_train_calcolate) 
-                        
+                        generate_initial_training_tasks(job_data, total_rows=calculated_train_rows) 
                         tasks_dispatched = True
-                        update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
+                        update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, tasks_dispatched, training_time, inference_time)
                     else:
-                        print(" [RECOVERY] Task già in coda SQS prima del crash. Salto il Fan-Out.")
+                        print(" [RECOVERY] SQS Fan-Out skipped to prevent duplicates.")
         
-                    start_infer = start_train # Fallback per sicurezza temporale
+                    start_infer = start_train # Fallback timestamp
 
-                    # 4. EVENT LOOP
-                    while len(risultati_inferenza_s3) < num_workers:
-                        # --- ASCOLTO TRAINING ---
+                    # 5. POLLING EVENT LOOP
+                    print("\n [EVENT LOOP] Master listening actively for Worker responses...\n")
+                    while len(s3_inference_results) < num_workers:
+                        
+                        # Train response queue
                         res_train = sqs_client.receive_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
                         if 'Messages' in res_train:
                             for msg in res_train['Messages']:
                                 train_resp = json.loads(msg['Body'])
                                 task_id = train_resp['task_id']
         
-                                if task_id not in train_completati:
-                                    # RACE CONDITION FIX: Prima in coda SQS, poi su DynamoDB
+                                if task_id not in completed_train_tasks:
                                     generate_inference_tasks(job_id, train_resp, dataset)
-                                    train_completati.add(task_id)
-                                    print(f" [TRAIN FATTO] {task_id} ha finito l'addestramento.")
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
+                                    completed_train_tasks.add(task_id)
+                                    print(f" [ACK] Worker completed training for {task_id}.")
+                                    update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, tasks_dispatched, training_time, inference_time)
         
                                 sqs_client.delete_message(QueueUrl=TRAIN_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                         
-                        # Stop timer training e avvio timer inferenza
-                        if len(train_completati) == num_workers and tempo_training == 0.0:
-                            tempo_training = time.time() - start_train
+                        # Timer switch: Train to Inference
+                        if len(completed_train_tasks) == num_workers and training_time == 0.0:
+                            training_time = time.time() - start_train
                             start_infer = time.time() 
-                            update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
+                            update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, tasks_dispatched, training_time, inference_time)
         
-                        # --- ASCOLTO INFERENZA ---
+                        # Inference response queue
                         res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
                         if 'Messages' in res_infer:
                             for msg in res_infer['Messages']:
                                 body = json.loads(msg['Body'])
                                 task_id = body['task_id']
                                 
-                                res_dati = body['s3_voti_uri']
-                                voti_s3_uri = res_dati['valore'] if isinstance(res_dati, dict) else res_dati
+                                s3_votes_data = body['s3_voti_uri']
+                                s3_votes_uri = s3_votes_data['valore'] if isinstance(s3_votes_data, dict) else s3_votes_data
                                 
-                                if task_id not in risultati_inferenza_s3:
-                                    risultati_inferenza_s3[task_id] = voti_s3_uri
-                                    print(f" [INFERENZA FATTA] {task_id} completato! ({len(risultati_inferenza_s3)}/{num_workers})")
+                                if task_id not in s3_inference_results:
+                                    s3_inference_results[task_id] = s3_votes_uri
+                                    print(f" [ACK] Worker completed inference for {task_id}! ({len(s3_inference_results)}/{num_workers})")
 
-                                    # Se abbiamo finito tutto, fermiamo il timer dell'inferenza prima del DB!
-                                    if len(risultati_inferenza_s3) == num_workers and tempo_inferenza == 0.0:
-                                        tempo_inferenza = time.time() - start_infer
+                                    # Halt inference timer if phase complete
+                                    if len(s3_inference_results) == num_workers and inference_time == 0.0:
+                                        inference_time = time.time() - start_infer
 
-                                    update_job_state(job_id, train_completati, risultati_inferenza_s3, start_train, tasks_dispatched, tempo_training, tempo_inferenza)
+                                    update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, tasks_dispatched, training_time, inference_time)
         
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
         
-                    # 5. AGGREGAZIONE FINALE E CHIUSURA
-                    # (Fallback se il master era crashato proprio durante l'aggregazione)
-                    if tempo_training == 0.0:
-                        tempo_training = time.time() - start_train
-                    if tempo_inferenza == 0.0:
-                        tempo_inferenza = time.time() - start_totale
+                    # 6. FINAL AGGREGATION
+                    if training_time == 0.0:
+                        training_time = time.time() - start_train
+                    if inference_time == 0.0:
+                        inference_time = time.time() - total_start_time
                         
-                    print("\n Tutti i Worker hanno completato la pipeline end-to-end!")
+                    print("\n [PIPELINE] All Workers completed their end-to-end tasks!")
                     scale_worker_infrastructure(0)
-                    print(" Calcolo delle metriche finali in corso...")
-                    tempo_totale = time.time() - start_totale
+                    
+                    total_run_time = time.time() - total_start_time
         
                     try:
                         weights = []
@@ -720,33 +713,33 @@ def main():
                         for i in range(num_workers):
                             weights.append(trees_per_worker + (1 if i < trees_remainder else 0))
 
-                        aggrega_e_valuta(job_id, dataset, risultati_inferenza_s3, num_workers, job_data['num_trees'], weights, tempo_training, tempo_inferenza)
+                        aggregate_and_evaluate(job_id, dataset, s3_inference_results, num_workers, job_data['num_trees'], weights, training_time, inference_time)
                     except Exception as e:
-                        print(f" Errore durante l'aggregazione finale: {e}")
+                        print(f" [EVALUATION ERROR] Final aggregation failed: {e}")
                         
-                    print(f" TEMPI -> Train: {tempo_training:.2f}s | Infer: {tempo_inferenza:.2f}s | Totale Sistema: {tempo_totale:.2f}s")
+                    print(f" [TIMERS] Train: {training_time:.2f}s | Infer: {inference_time:.2f}s | Global: {total_run_time:.2f}s")
 
 
-                # RAMO B: INFERENZA REAL-TIME SINGOLA
+                # BRANCH B: REAL-TIME SINGLE INFERENCE 
                 elif mode == 'infer':
-                    start_totale = time.time()
+                    total_start_time = time.time()
                     target_model = job_data['target_model']
                     tuple_data = job_data['tuple_data']
                     
                     bucket = load_config().get("s3_bucket")
-                    modelli_s3_uris = conta_parti_modello(bucket, dataset, target_model)
-                    num_workers = len(modelli_s3_uris)
+                    model_s3_uris = count_model_parts(bucket, dataset, target_model)
+                    num_workers = len(model_s3_uris)
                     
-                    print(f" Modello '{target_model}' diviso in {num_workers} parti. Avvio Worker...")
+                    print(f" [REAL-TIME] Target model '{target_model}' chunked into {num_workers} parts. Scaling workers...")
                     
-                    # --- TIMER 1: PROVISIONING AWS (COLD START) ---
+                    # TIMER 1: AWS cold start
                     start_provisioning = time.time()
                     scale_worker_infrastructure(num_workers)
-                    tempo_provisioning = time.time() - start_provisioning
+                    provisioning_time = time.time() - start_provisioning
                     
-                    # --- TIMER 2: INFERENZA PURA (SQS + CALCOLO) ---
-                    start_inferenza = time.time()
-                    for i, uri in enumerate(modelli_s3_uris):
+                    # TIMER 2: Inference
+                    inference_pure_start = time.time()
+                    for i, uri in enumerate(model_s3_uris):
                         task_id = f"task_infer_rt_{i+1}"
                         infer_task = {
                             "job_id": job_id, "task_id": task_id, "dataset": dataset,
@@ -754,59 +747,58 @@ def main():
                         }
                         sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
                         
-                    voti_ricevuti_totali = []
-                    messaggi_letti = 0
-                    while messaggi_letti < num_workers:
+                    total_received_votes = []
+                    read_messages = 0
+                    
+                    while read_messages < num_workers:
                         res = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, WaitTimeSeconds=2)
                         if 'Messages' in res:
                             for msg in res['Messages']:
                                 body = json.loads(msg['Body'])
-                                res_dati = body['s3_voti_uri']
+                                res_data = body['s3_voti_uri']
                                 
-                                # Verifica che sia la risposta strutturata real-time (dict) e non il bulk (stringa)
-                                if isinstance(res_dati, dict) and res_dati.get("tipo") == "singolo":
+                                # Validate correct format for Real-Time Single prediction vs Bulk
+                                if isinstance(res_data, dict) and res_data.get("tipo") == "singolo":
+                                    worker_predictions = res_data['valore']
+                                    total_received_votes.extend(worker_predictions)
+                                    read_messages += 1
 
-                                    lista_previsioni_worker = res_dati['valore']
-                                    voti_ricevuti_totali.extend(lista_previsioni_worker)
-                                    messaggi_letti += 1
-
-                                    print(f" -> Ricevuti {len(lista_previsioni_worker)} voti da un worker.")
+                                    print(f"   -> Gathered {len(worker_predictions)} votes from worker.")
                                     
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                                 
-                    tempo_inferenza_pura = time.time() - start_inferenza
-                    
+                    pure_inference_time = time.time() - inference_pure_start
                     scale_worker_infrastructure(0)
                     
-                    # Consenso distribuito (Aggregation)
+                    # Real-Time Aggregation
                     ml_handler = ModelFactory.get_model(dataset)
                     if ml_handler.task_type == 'classification':
-                        predizione_finale = max(set(voti_ricevuti_totali), key=voti_ricevuti_totali.count) # Moda / Maggioranza
-                        tipo_task = "Classificazione (Voto Maggioranza)"
-                        voti_0 = voti_ricevuti_totali.count(0)
-                        voti_1 = voti_ricevuti_totali.count(1)
-                        print(f" [SPOGLIO] Classe 0: {voti_0} voti | Classe 1: {voti_1} voti")
+                        final_prediction = max(set(total_received_votes), key=total_received_votes.count) 
+                        task_str = "Classification (Majority Vote)"
+                        votes_0 = total_received_votes.count(0)
+                        votes_1 = total_received_votes.count(1)
+                        print(f" [POLL] Class 0: {votes_0} votes | Class 1: {votes_1} votes")
                     else:
-                        predizione_finale = sum(voti_ricevuti_totali) / len(voti_ricevuti_totali) # Media
-                        tipo_task = "Regressione (Media)"
+                        final_prediction = sum(total_received_votes) / len(total_received_votes) 
+                        task_str = "Regression (Mean)"
                         
-                    tempo_totale = time.time() - start_totale
+                    total_run_time = time.time() - total_start_time
                     
                     print("\n" + "=" * 60)
-                    print(f" RISULTATO FINALE INFERENZA ({tipo_task}): {predizione_finale:.2f}")
+                    print(f" REAL-TIME PREDICTION ({task_str}): {final_prediction:.2f}")
                     print("-" * 60)
-                    print(f" Tempo di Provisioning AWS (Cold Start):  {tempo_provisioning:.2f}s")
-                    print(f" Tempo di Inferenza (Calcolo + SQS):      {tempo_inferenza_pura:.2f}s")
-                    print(f" Tempo di Latenza TOTALE del sistema:     {tempo_totale:.2f}s")
+                    print(f" AWS Provisioning Time (Cold Start):   {provisioning_time:.2f}s")
+                    print(f" Pure Inference Time (SQS + CPU):      {pure_inference_time:.2f}s")
+                    print(f" TOTAL Global System Latency:          {total_run_time:.2f}s")
                     print("=" * 60 + "\n")
 
             finally:
-                # --- FINE HEARTBEAT DEL MASTER ---
+                # STOP MASTER HEARTBEAT 
                 stop_event_master.set()
                 heartbeat_thread_master.join()
                 
             sqs_client.delete_message(QueueUrl=CLIENT_QUEUE_URL, ReceiptHandle=receipt_handle)
-            print(f" JOB {job_id} COMPLETATO E CHIUSO.\n")
+            print(f" JOB {job_id} COMPLETED SUCCESSFULLY.\n")
 
 if __name__ == "__main__":
     main()
