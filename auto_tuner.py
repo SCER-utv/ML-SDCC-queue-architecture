@@ -1,12 +1,13 @@
-import boto3
-import json
 import sys
+import json
 import itertools
 from datetime import datetime
 
-# --- CARICAMENTO DINAMICO CONFIGURAZIONE ---
+import boto3
+
 from src.utils.config import load_config
 
+# DYNAMIC CONFIGURATION & AUTO-DISCOVERY
 try:
     config = load_config()
 except Exception as e:
@@ -16,42 +17,44 @@ except Exception as e:
 CLIENT_QUEUE_URL = config["sqs_queues"]["client"]
 AWS_REGION = config.get("aws_region")
 
-# GRIGLIA DEGLI IPERPARAMETRI (Modifica questi array prima di avviare)
+# =====================================================================
+# HYPERPARAMETER GRID (Modify these arrays before running)
+# ====================================================================
 DATASET_TO_TEST = "airlines"          
-WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8, 9]     # Raddoppio dei nodi per misurare lo Speedup
-TREES_TO_TEST   = [5, 10, 25, 50, 100, 200, 400]  # Raddoppio del cari
+WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8, 9]     # Node scaling for Speedup measurement
+TREES_TO_TEST   = [5, 10, 25, 50, 100, 200, 400]  # Tree scaling for workload variation
 # =====================================================================
 
+# Main execution loop. Generates job payloads and dispatches them to the SQS Client Queue as an automated batch.
 def main():
     sqs_client = boto3.client('sqs', region_name=AWS_REGION)
     
-    # Crea in automatico il prodotto cartesiano (tutte le combinazioni possibili)
-    # Es: (2, 20), (2, 50), ..., (6, 200)
-    combinazioni = list(itertools.product(WORKERS_TO_TEST, TREES_TO_TEST))
+    # Automatically generate the cartesian product (all possible combinations). Example: (2, 20), (2, 50), ..., (9, 400)
+    grid_combinations = list(itertools.product(WORKER_COUNTS, TREE_COUNTS))
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(" DISTRIBUTED RANDOM FOREST - FULLY AUTOMATED GRID SEARCH")
-    print("="*60)
-    print(f" Dataset target : {DATASET_TO_TEST.upper()}")
-    print(f" Worker da testare : {WORKERS_TO_TEST}")
-    print(f" Alberi da testare : {TREES_TO_TEST}")
-    print(f" Totale Job Generati: {len(combinazioni)}")
-    print("="*60 + "\n")
+    print("=" * 60)
+    print(f" Target Dataset  : {TARGET_DATASET.upper()}")
+    print(f" Workers Grid    : {WORKER_COUNTS}")
+    print(f" Trees Grid      : {TREE_COUNTS}")
+    print(f" Total Jobs      : {len(grid_combinations)}")
+    print("=" * 60 + "\n")
 
     batch_timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     
-    # Ciclo di invio automatico a SQS
-    for w, t in combinazioni:
-        job_id = f"job_{DATASET_TO_TEST}_W{w}_T{t}_TUNING_{batch_timestamp}"
+# Sequential dispatch to SQS
+    for worker_count, tree_count in grid_combinations:
+        job_id = f"job_{TARGET_DATASET}_W{worker_count}_T{tree_count}_TUNING_{batch_timestamp}"
         
         payload = {
             "mode": "train",
             "job_id": job_id,
-            "dataset": DATASET_TO_TEST,
-            "num_workers": w,
-            "num_trees": t,
-            # FONDAMENTALE: Fissiamo i dati per fare un confronto scientifico!
-            # Il Master userà i file già presenti (train e validation) senza rigenerarli
+            "dataset": TARGET_DATASET,
+            "num_workers": worker_count,
+            "num_trees": tree_count,
+            # CRITICAL: We lock the data split to ensure scientific comparison!
+            # The Master will reuse the existing S3 files (train/test) without regenerating them.
             "dynamic_split": False 
         }
         
@@ -62,13 +65,19 @@ def main():
                 MessageGroupId="ML_Jobs",
                 MessageDeduplicationId=job_id
             )
-            print(f" [ACCODATO] Worker: {w:<2} | Alberi: {t:<4} | Job ID: {job_id}")
+            print(f" [ENQUEUED] Workers: {worker_count:<2} | Trees: {tree_count:<4} | Job ID: {job_id}")
         except Exception as e:
-            print(f" [ERRORE] Invio fallito per W{w}-T{t}: {e}")
+            print(f" [ERROR] Dispatch failed for W{worker_count}-T{tree_count}: {e}")
 
-    print("\n Tutte le configurazioni sono state inviate alla coda SQS con successo!")
-    print(" Il Master Node le smaltirà una ad una in sequenza in modo completamente autonomo.")
-    print(f" Controlla il file s3://{config.get('s3_bucket')}/results/{DATASET_TO_TEST}/{DATASET_TO_TEST}_results.csv per i risultati finali.")
+    print("\n [SUCCESS] All grid search configurations successfully dispatched to SQS!")
+    print(" [INFO] The Master Node will process them sequentially and autonomously.")
+    
+    target_bucket = config.get('s3_bucket')
+    print(f" [INFO] Monitor the final results at: s3://{target_bucket}/results/{TARGET_DATASET}/{TARGET_DATASET}_results.csv")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n [SYSTEM] Auto-Tuner terminated by user. Goodbye!")
+        sys.exit(0)
