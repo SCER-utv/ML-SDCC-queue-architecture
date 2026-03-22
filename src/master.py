@@ -445,7 +445,7 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
     predictions_list = []
     print(f" Downloading {len(s3_inference_results)} inference result files from S3...")
 
-    for task_id, s3_uri in risultati_inferenza_s3.items():
+    for task_id, s3_uri in s3_inference_results.items():
         bucket, key = parse_s3_uri(s3_uri)
         local_path = f"/tmp/res_{task_id}.npy"
         s3.download_file(bucket, key, local_path)
