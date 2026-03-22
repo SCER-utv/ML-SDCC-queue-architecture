@@ -43,7 +43,7 @@ def main():
 
     batch_timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     
-# Sequential dispatch to SQS
+    # Sequential dispatch to SQS
     for worker_count, tree_count in grid_combinations:
         job_id = f"job_{TARGET_DATASET}_W{worker_count}_T{tree_count}_TUNING_{batch_timestamp}"
         
