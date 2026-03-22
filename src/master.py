@@ -75,10 +75,10 @@ def scale_worker_infrastructure(num_workers):
     print(f" [ASG] Waiting for instances to start for tagging...")
     ec2_client = boto3.client('ec2', region_name=AWS_REGION)
     
-    max_attesa = 24 # 24 * 5 sec = 120 seconds max
+    max_wait = 24 # 24 * 5 sec = 120 seconds max
     found_instances = []
     
-    for _ in range(max_attesa):
+    for _ in range(max_wait):
         time.sleep(5)
         response = ec2_client.describe_instances(
             Filters=[
@@ -131,7 +131,7 @@ def get_total_rows_s3_select(bucket, key):
         for event in resp['Payload']:
             if 'Records' in event:
                 total_rows = int(event['Records']['Payload'].decode('utf-8').strip())
-                print(f" [S3 Select] Trovate {total_rows} righe!")
+                print(f" [S3 Select] Found {total_rows} rows!")
                 return total_rows
         return 0
     except Exception as e:
