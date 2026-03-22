@@ -186,7 +186,7 @@ def execute_inference(infer_task_data, receipt_handle):
 
             dataset_name = infer_task_data['dataset']
             s3_votes_key = f"results/{dataset_name}/{job_id}/task_{task_id}.npy"
-            s3_client.upload_file(local_npy_path, bucket, s3_votes_ke
+            s3_client.upload_file(local_npy_path, bucket, s3_votes_key)
 
             os.remove(local_model_path)
             os.remove(local_npy_path)
