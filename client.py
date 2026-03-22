@@ -65,7 +65,8 @@ def main():
         sys.exit(1)
 
     dataset_map = {}
-    
+
+    # Dynamically list all datasets registered in config.json
     for i, ds_name in enumerate(available_datasets, start=1):
         ds_type = DATASETS_METADATA[ds_name]["type"]
         print(f" {i}) {ds_name.capitalize()} ({ds_type.capitalize()})")
@@ -92,6 +93,7 @@ def main():
             except ValueError:
                 print(" Invalid input. Please enter integers only.")
 
+        # Generate a unique and descriptive Job ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         job_id = f"job_{dataset}_{trees}trees_{workers}workers_{timestamp}"
         
@@ -115,14 +117,16 @@ def main():
             
         print("\n=== AVAILABLE MODELS ===")
         for i, m in enumerate(models):
+            # Split the Job ID string to extract metadata (trees, workers, date, time)
             parts = m.split('_')
             try:
-                # Handles both old and new job ID formats
+                # Format: job_{dataset}_{trees}trees_{workers}workers_{date}_{time}
                 if "workers" in m:
                     trees_count = parts[2].replace('trees', '')
                     workers_count = parts[3].replace('workers', '')
                     raw_date = parts[4]
                     raw_time = parts[5]
+                # Legacy format fallback
                 else:
                     trees_count = parts[2].replace('trees', '')
                     workers_count = "?" 
@@ -133,6 +137,7 @@ def main():
                 time_formatted = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}"
                 
                 print(f"  [{i}]  Trees: {trees_count:<4} |  Workers: {workers_count:<2} |  Date: {date_formatted} {time_formatted}  (ID: {m})")
+                # If parsing fails due to manual renaming, just print the raw S3 folder name
             except Exception:
                 print(f"  [{i}] {m}")
         
@@ -146,6 +151,7 @@ def main():
             except ValueError:
                 print(" Please enter a valid number.")
 
+        # Auto-detect required features based on config.json metadata
         required_features = DATASETS_METADATA[dataset]["features"]
 
         print("\n" + "-" * 40)
@@ -179,6 +185,7 @@ def main():
     print(" Dispatching request to Master Node...")
     
     try:
+        # Enqueue the JSON payload into the FIFO queue
         sqs_client.send_message(
             QueueUrl=CLIENT_QUEUE_URL,
             MessageBody=json.dumps(payload),
