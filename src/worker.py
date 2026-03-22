@@ -1,18 +1,19 @@
-import boto3
+import gc
 import json
-import time
 import os
 import threading
-import pandas as pd
-import numpy as np
+import time
+
+import boto3
 import joblib
-import gc
-from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+import pandas as pd
+
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
 
 # ==========================================
-# CONFIGURAZIONE DINAMICA DA JSON
+# DYNAMIC CONFIGURATION
 # ==========================================
 config = load_config()
 
@@ -26,54 +27,55 @@ INFER_RESPONSE_QUEUE = config["sqs_queues"]["infer_response"]
 sqs_client = boto3.client('sqs', region_name=AWS_REGION)
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 
-# Thread in background che allunga la vita del messaggio ogni 2 minuti
-def extend_sqs_visibility(queue_url, receipt_handle, stop_event):
-    
-    while not stop_event.is_set():
-        # Dorme 2 minuti. Se nel frattempo il training finisce (stop_event viene settato),
-        # il ciclo si interrompe prima di fare un'altra chiamata ad AWS.
+# ==========================================
+# UTILITY FUNCTIONS
+# ==========================================
 
+# Background thread that periodically extends the SQS message visibility timeout. 
+# Prevents other workers from picking up the message while it's still being processed.
+def extend_sqs_visibility(queue_url, receipt_handle, stop_event):
+    while not stop_event.is_set():
+        # Sleep for 2 minutes. If, in the meantime, the training finishes (stop_event is set), the loop stops before making another call to AWS
         stop_event.wait(120) 
         if not stop_event.is_set():
             try:
-                # Estende il timeout di altri 5 minuti (300 secondi)
+                # Extends the timeout for another 5 minutes
                 sqs_client.change_message_visibility(
                     QueueUrl=queue_url,
                     ReceiptHandle=receipt_handle,
                     VisibilityTimeout=300 
                 )
-                print(" [HEARTBEAT] Timeout del messaggio SQS esteso di 5 minuti.")
+                print(" [HEARTBEAT] SQS message visibility extended by 5 minutes.")
             except Exception as e:
-                print(f" [HEARTBEAT] Errore estensione SQS (forse già cancellato): {e}")
+                print(f" [HEARTBEAT] SQS extension error (likely already deleted): {e}")
 
-# Funzione helper per estrarre bucket e key da un URI s3://
+# Parses an S3 URI into bucket and object key
 def parse_s3_uri(s3_uri):
     parts = s3_uri.replace("s3://", "").split("/", 1)
     return parts[0], parts[1]
 
-
 # ==========================================
 # CORE LOGIC: TRAINING
 # ==========================================
+
+# Executes the distributed training task on a specific data chunk
 def train(train_task_data, receipt_handle):
     job_id = train_task_data['job_id']
     task_id = train_task_data['task_id']
     dataset_uri = train_task_data['dataset_s3_path']
 
-    # --- INIZIO HEARTBEAT ---
+    # START HEATBEAT
     stop_event = threading.Event()
     heartbeat_thread = threading.Thread(
         target=extend_sqs_visibility,
         args=(TRAIN_TASK_QUEUE, receipt_handle, stop_event)
     )
     heartbeat_thread.start()
-    # ------------------------
 
-    # METTIAMO IL TRY QUI! TUTTO IL RESTO VA DENTRO IL TRY.
     try:
-        print(f" [TRAIN] Avvio {task_id}. Lettura di {train_task_data['num_rows']} righe da S3...")
+        print(f" [TRAIN] Starting {task_id}. Fetching {train_task_data['num_rows']} rows from S3...")
 
-        # 1. LETTURA PARZIALE DA S3 (Zero-Waste RAM)
+        # 1. PARTIAL S3 READ (Zero-Waste RAM)
         skip_rows = train_task_data['skip_rows']
         if skip_rows > 0:
             rows_to_skip = range(1, skip_rows + 1)
@@ -92,11 +94,11 @@ def train(train_task_data, receipt_handle):
         start_time = time.time()
         print("timer avviato")
 
-        # 2. TRAINING
+        # 2. Training
         rf = ml_handler.process_and_train(df, train_task_data)
-        print(f"   -> [job id:{job_id}, task id: {task_id}] Training completato in {time.time() - start_time:.2f}s")
+        print(f" [Job: {job_id} | Task: {task_id}] Training completed in {time.time() - start_time:.2f}s")
 
-        # 3. SALVATAGGIO E UPLOAD
+        # 3. Save and upload
         local_model_path = f"/tmp/{task_id}_{job_id}.joblib"
         joblib.dump(rf, local_model_path)
 
@@ -104,96 +106,95 @@ def train(train_task_data, receipt_handle):
         dataset_name = train_task_data['dataset']
         s3_key = f"models/{dataset_name}/{job_id}/task_{task_id}.joblib"
 
-        print("   -> Upload del modello su S3 in corso...")
+        print(" Uploading model to S3...")
         s3_client.upload_file(local_model_path, bucket, s3_key)
 
-        os.remove(local_model_path)  # Pulizia disco locale
+        os.remove(local_model_path)  
         return f"s3://{bucket}/{s3_key}"
 
     finally:
-        # --- FINE HEARTBEAT ---
-        # Ora il thread si spegnerà SEMPRE, anche se pandas esplode!
+        # END HEARTBEAT 
         stop_event.set()
         heartbeat_thread.join()
 
 
 # ==========================================
-# CORE LOGIC: INFERENZA
+# CORE LOGIC: INFERENCE
 # ==========================================
-def esegui_inferenza(infer_task_data, receipt_handle):
+
+# Executes inference using a previously trained local model chunk
+def execute_inference(infer_task_data, receipt_handle):
     job_id = infer_task_data['job_id']
     task_id = infer_task_data['task_id']
     model_s3_uri = infer_task_data['model_s3_uri']
 
-    # --- INIZIO HEARTBEAT ---
+    # START HEATBEAT
     stop_event = threading.Event()
     heartbeat_thread = threading.Thread(
         target=extend_sqs_visibility,
         args=(INFER_TASK_QUEUE, receipt_handle, stop_event)
     )
     heartbeat_thread.start()
-    # ------------------------
 
     try:
-        print(f" [INFER] Avvio inferenza {task_id}. Scaricamento modello...")
+        print(f" [INFER] Starting inference {task_id}. Downloading model...")
         bucket, model_key = parse_s3_uri(model_s3_uri)
 
-        # 1. SCARICA IL MODELLO DA S3
+        # 1. Download model from S3
         local_model_path = f"/tmp/model_{job_id}_{task_id}.joblib"
         s3_client.download_file(bucket, model_key, local_model_path)
         rf = joblib.load(local_model_path)
 
-        # CASO 1: INFERENZA SU SINGOLA TUPLA (Real-time)
+        # CASE 1: SINGLE TUPLE INFERENCE (Real-time)
         if 'tuple_data' in infer_task_data:
-            print(f" [INFER] Predizione su singola tupla in corso...")
-            dati = np.array(infer_task_data['tuple_data']).reshape(1, -1)
-            all_pred = [float(tree.predict(dati)[0]) for tree in rf.estimators_]
+            print(f" [INFER] Single tuple real-time prediction in progress...")
+            data_array = np.array(infer_task_data['tuple_data']).reshape(1, -1)
+            all_pred = [float(tree.predict(data_array)[0]) for tree in rf.estimators_]
             os.remove(local_model_path)
+            
+            # Note: Italian keys kept intact to preserve Master-Worker semantic contract
             return {"tipo": "singolo", "valore": all_pred}
 
-        # CASO 2: INFERENZA BULK DA S3 (A BLOCCHI PER SALVARE RAM)
+        # CASE 2: BULK INFERENCE FROM S3 (Memory-efficient chunking)
         else:
-            print(f" [INFER] Inferenza su Dataset Intero (A BLOCCHI) in corso...")
+            print(f" [INFER] Bulk inference on full dataset in progress (Chunked)...")
             test_dataset_uri = infer_task_data['test_dataset_uri']
             ml_handler = ModelFactory.get_model(dataset_name=infer_task_data['dataset'])
 
-            print(f"   -> Calcolo previsioni in corso (Chunksize: 500k)...")
+            print(f" Calculating predictions (Chunksize: 500k)...")
             start_time = time.time()
 
-            tutte_le_predizioni = []
-
+            all_predictions = []
             chunksize = 500000
 
-            # --- LA MAGIA DEL CHUNKING ---
             for chunk in pd.read_csv(test_dataset_uri, chunksize=chunksize, low_memory=False):
-                # Predizione solo sul blocco corrente
-                risultati_chunk = ml_handler.process_and_predict(rf, chunk)
-                tutte_le_predizioni.append(risultati_chunk)
+                # Predict on current chunk only
+                chunk_results = ml_handler.process_and_predict(rf, chunk)
+                all_predictions.append(chunk_results)
 
-                # Svuotiamo la RAM in modo aggressivo
-                del chunk, risultati_chunk
+                # Aggressively free RAM
+                del chunk, chunk_results
                 gc.collect()
 
-            # Uniamo i risultati parziali in un unico array Numpy
-            risultati_numpy = np.concatenate(tutte_le_predizioni)
-            print(
-                f"   -> Previsioni completate in {time.time() - start_time:.2f} secondi. Generate {len(risultati_numpy)} righe.")
-            # -----------------------------
+            # Merge partial results into a single Numpy array
+            numpy_results = np.concatenate(all_predictions)
+            print(f" Predictions completed in {time.time() - start_time:.2f}s. Generated {len(numpy_results)} rows.")
 
-            # SALVATAGGIO IN .NPY COMPRESSO E UPLOAD
+            # Compress, save and upload .npy
             local_npy_path = f"/tmp/results_{job_id}_{task_id}.npy"
-            np.save(local_npy_path, risultati_numpy)
+            np.save(local_npy_path, numpy_results)
 
             dataset_name = infer_task_data['dataset']
-            s3_voti_key = f"results/{dataset_name}/{job_id}/task_{task_id}.npy"
-            s3_client.upload_file(local_npy_path, bucket, s3_voti_key)
+            s3_votes_key = f"results/{dataset_name}/{job_id}/task_{task_id}.npy"
+            s3_client.upload_file(local_npy_path, bucket, s3_votes_ke
 
             os.remove(local_model_path)
             os.remove(local_npy_path)
-            return {"tipo": "bulk", "valore": f"s3://{bucket}/{s3_voti_key}"}
+                                  
+            # Note: Italian keys kept intact to preserve Master-Worker semantic contract
+            return {"tipo": "bulk", "valore": f"s3://{bucket}/{s3_votes_key}"}
 
     finally:
-        # Questo garantisce che il thread si chiuda sempre, anche in caso di crash
         stop_event.set()
         heartbeat_thread.join()
 
@@ -201,15 +202,15 @@ def esegui_inferenza(infer_task_data, receipt_handle):
 # EVENT LOOP: PRIORITY POLLING
 # ==========================================
 def main():
-    print(" Worker Node Avviato e pronto a ricevere ordini...")
+    print(" Worker Node initialized and waiting for tasks...")
 
     while True:
-        # Teniamo traccia del messaggio corrente per la gestione degli errori
+        # We keep track of the current message for error handling
         current_queue = None
         current_receipt = None
         
         try:
-            # PRIORITÀ 1: TRAINING
+            # PRIORITY 1: TRAINING TASKS
             res_train = sqs_client.receive_message(
                 QueueUrl=TRAIN_TASK_QUEUE, MaxNumberOfMessages=1, WaitTimeSeconds=5
             )
@@ -221,10 +222,10 @@ def main():
                 
                 train_task_data = json.loads(msg['Body'])
 
-                # Esegue il lavoro pesante
+                # Execute heavy lifting
                 s3_model_uri = train(train_task_data, current_receipt)
 
-                # Risponde al Master
+                # Respond to master
                 train_resp = {
                     "job_id": train_task_data['job_id'],
                     "task_id": train_task_data['task_id'],
@@ -232,15 +233,14 @@ def main():
                 }
                 sqs_client.send_message(QueueUrl=TRAIN_RESPONSE_QUEUE, MessageBody=json.dumps(train_resp))
 
-                # CANCELLA IL MESSAGGIO SOLO DOPO IL SUCCESSO (Fault Tolerance)
+                # Fault Tolerance: Delete message ONLY upon full success
                 sqs_client.delete_message(QueueUrl=TRAIN_TASK_QUEUE, ReceiptHandle=current_receipt)
-                print(f" Training {train_task_data['task_id']} completato con successo!\n")
+                print(f" Training {train_task_data['task_id']} completed successfully!\n")
 
-                # FONDAMENTALE: Torna su e ricontrolla la coda di training!
-                continue 
+                # CRITICAL: Loop back to check for more training tasks before inferencing
+                continue
 
-            # PRIORITÀ 2: INFERENZA
-            # Ci arriva SOLO se la coda di training non ha restituito messaggi.
+            # PRIORITY 2: INFERENCE TASKS. Reached ONLY if the training queue is empty.
             res_infer = sqs_client.receive_message(
                 QueueUrl=INFER_TASK_QUEUE, MaxNumberOfMessages=1, WaitTimeSeconds=5
             )
@@ -252,44 +252,44 @@ def main():
                 
                 infer_task_data = json.loads(msg['Body'])
 
-                # Esegue il lavoro pesante
-                s3_voti_uri = esegui_inferenza(infer_task_data, current_receipt)
+                # Execute heavy lifting
+                s3_votes_uri = execute_inference(infer_task_data, current_receipt)
 
                 # Risponde al Master
-                risposta = {
+                infer_response = {
                     "job_id": infer_task_data['job_id'],
                     "task_id": infer_task_data['task_id'],
                     "s3_voti_uri": s3_voti_uri
                 }
-                sqs_client.send_message(QueueUrl=INFER_RESPONSE_QUEUE, MessageBody=json.dumps(risposta))
+                sqs_client.send_message(QueueUrl=INFER_RESPONSE_QUEUE, MessageBody=json.dumps(infer_response))
 
-                # CANCELLA IL MESSAGGIO SOLO DOPO IL SUCCESSO
+                # Fault Tolerance: Delete message ONLY upon full success
                 sqs_client.delete_message(QueueUrl=INFER_TASK_QUEUE, ReceiptHandle=current_receipt)
                 print(f" Inferenza {infer_task_data['task_id']} completata con successo!\n")
                 
-                continue  # Ricomincia il ciclo
+                continue 
 
-            # Se entrambe le code sono vuote, respira 2 secondi per non intasare le API AWS
+            # If both queues are empty, rest to avoid throttling AWS APIs
             time.sleep(2)
 
         except Exception as e:
             
-            # GESTIONE MORTE LENTA / OOM
-            print(f" \n[FAULT TOLERANCE] Rilevato errore critico nel Worker: {e}")
+            # SLOW DEATH / OOM MANAGEMENT
+            print(f" \n[FAULT TOLERANCE] Critical error detected in Worker: {e}")
             
-            # Se abbiamo un messaggio "in mano", lo rigettiamo istantaneamente nella coda
+            # If holding a message, inject it back immediately via Immediate NACK
             if current_queue and current_receipt:
                 try:
-                    print(" [FAULT TOLERANCE] Eseguo Rilascio Immediato (VisibilityTimeout=0) per riassegnazione rapida...")
+                    print(" [FAULT TOLERANCE] Executing Immediate Release (VisibilityTimeout=0) for rapid reassignment...")
                     sqs_client.change_message_visibility(
                         QueueUrl=current_queue,
                         ReceiptHandle=current_receipt,
                         VisibilityTimeout=0
                     )
                 except Exception as inner_e:
-                    print(f" [FAULT TOLERANCE] Impossibile rilasciare il messaggio (forse già scaduto): {inner_e}")
+                    print(f" [FAULT TOLERANCE] Could not release message (likely expired): {inner_e}")
             
-            # Riposo per evitare loop di riavvio se l'errore è infrastrutturale
+            # Cooldown to prevent rapid crash looping on infrastructure errors
             time.sleep(10)
 
 
