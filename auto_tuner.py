@@ -20,9 +20,9 @@ AWS_REGION = config.get("aws_region")
 # =====================================================================
 # HYPERPARAMETER GRID (Modify these arrays before running)
 # ====================================================================
-DATASET_TO_TEST = "airlines"          
-WORKERS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8, 9]     # Node scaling for Speedup measurement
-TREES_TO_TEST   = [5, 10, 25, 50, 100, 200, 400]  # Tree scaling for workload variation
+TARGET_DATASET = "airlines"          
+WORKER_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9]     # Node scaling for Speedup measurement
+TREE_COUNTS = [5, 10, 25, 50, 100, 200, 400]  # Tree scaling for workload variation
 # =====================================================================
 
 # Main execution loop. Generates job payloads and dispatches them to the SQS Client Queue as an automated batch.
