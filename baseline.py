@@ -135,6 +135,7 @@ def main():
 
             # Inietta i parametri di esecuzione
             params["n_estimators"] = trees  # Oppure "trees", dipende dalla ModelFactory
+            params["trees"] = trees
             params["random_state"] = 42
             params["n_jobs"] = -1
 
