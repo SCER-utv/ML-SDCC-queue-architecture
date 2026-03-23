@@ -627,6 +627,7 @@ def main():
 
                     if not tasks_dispatched:
                         if True:
+                        # DECOMMENTARE RIGA SOPRA PER EVITARE LO SPLITTING if job_data.get('dynamic_split', True):
                             try:
                                 print(f" [PIPELINE] Client requested dataset streaming split...")
                                 calculated_train_rows = execute_streaming_split(dataset) 
