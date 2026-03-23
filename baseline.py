@@ -43,7 +43,7 @@ GOLD_STANDARD_PARAMS = {
         50:  {"max_depth": 38, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse"},
         100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"},
 
-        # DA MODIFICARE
+        # DA MODIFICARE DOPO I RISULTATI
         200: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"}, 
         300: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"}  
     }
