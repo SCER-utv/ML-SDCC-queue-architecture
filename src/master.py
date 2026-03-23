@@ -626,7 +626,7 @@ def main():
                     calculated_train_rows = None
 
                     if not tasks_dispatched:
-                        if job_data.get('dynamic_split', True):
+                        if True:
                             try:
                                 print(f" [PIPELINE] Client requested dataset streaming split...")
                                 calculated_train_rows = execute_streaming_split(dataset) 
