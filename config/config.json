@@ -34,7 +34,7 @@
       "target": "Label",
       "type": "classification"
     }
-  }
+  },
 
   "datasets_metadata": {
     "airlines": {
