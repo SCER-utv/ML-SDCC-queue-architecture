@@ -28,7 +28,7 @@ TARGET_BUCKET = config.get("s3_bucket")
 # BASELINE GRID CONFIGURATION (Modify before running)
 # =====================================================================
 TARGET_DATASET = "airlines"  # Change to "taxi" for regression
-TREES_GRID = [5, 10, 25, 50, 100, 200]
+TREES_GRID = [50, 100, 200, 300]
 # =====================================================================
 
 s3_client = boto3.client('s3', region_name=AWS_REGION)
