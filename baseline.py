@@ -31,18 +31,21 @@ TARGET_BUCKET = config.get("s3_bucket")
 TARGET_DATASETS = ["airlines", "taxi"]  # Change to "taxi" for regression
 TREES_GRID = [50, 100, 200, 300]
 
+# DA MODIFICARE CON I CORRETTI PARAMETRI
 GOLD_STANDARD_PARAMS = {
     "airlines": {
-        50:  {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.35, "max_samples": 0.54, "criterion": "gini"}, 
-        100: {"max_depth": 22, "min_samples_split": 40, "min_samples_leaf": 5, "max_features": 0.35, "max_samples": 0.60, "criterion": "gini"}, 
-        200: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.35, "max_samples": 0.54, "criterion": "gini"}, 
-        300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.35, "max_samples": 0.54, "criterion": "gini"}  
+        50:  {"max_depth": 20, "min_samples_split": 50, "min_samples_leaf": 5, "max_features": 0.231, "max_samples": 0.598, "criterion": "gini", "class_weight": None}, 
+        100: {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": 0.234, "max_samples": 0.564, "criterion": "gini", "class_weight": None}, 
+        200: {"max_depth": 19, "min_samples_split": 20, "min_samples_leaf": 4, "max_features": 0.300, "max_samples": 0.600, "criterion": "gini", "class_weight": None}, 
+        300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.357, "max_samples": 0.539, "criterion": "gini", "class_weight": None}  
     },
     "taxi": {
         50:  {"max_depth": 38, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse"},
         100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"},
-        200: {"max_depth": 50, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": 0.6, "max_samples": 1.0, "criterion": "friedman_mse"}, 
-        300: {"max_depth": 50, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": 0.6, "max_samples": 1.0, "criterion": "friedman_mse"}  
+
+        # DA MODIFICARE
+        200: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"}, 
+        300: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse"}  
     }
 }
 # =====================================================================
