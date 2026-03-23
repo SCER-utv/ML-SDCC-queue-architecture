@@ -35,4 +35,15 @@
       "type": "classification"
     }
   }
+
+  "datasets_metadata": {
+    "airlines": {
+      "train_path": "data/processed/airlines/airlines_train.csv",
+      "test_path": "data/processed/airlines/airlines_test.csv"
+    },
+    "taxi": {
+      "train_path": "data/processed/taxi/taxi_train.csv",
+      "test_path": "data/processed/taxi/taxi_test.csv"
+    }
+  }
 }
