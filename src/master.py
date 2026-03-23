@@ -212,8 +212,9 @@ def execute_streaming_split(dataset_name):
     print(f" [SPLIT] Starting 2-way dynamic streaming split for '{dataset_name}'...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
-    
-    source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
+
+    # DA MODIFICARE
+    source_key = f"data/interim/{dataset_name}/{dataset_name}_1M.csv"
     train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
     test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
     
