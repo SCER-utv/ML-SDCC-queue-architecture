@@ -137,6 +137,7 @@ def main():
             params["n_estimators"] = trees  # Oppure "trees", dipende dalla ModelFactory
             params["trees"] = trees
             params["random_state"] = 42
+            params["seed"] = 42
             params["n_jobs"] = -1
 
             print(f" [BASELINE TRAIN] Training model with params: {params}")
