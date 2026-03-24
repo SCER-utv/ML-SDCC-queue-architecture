@@ -143,9 +143,23 @@ def main():
             train_time = time.time() - train_start
             print(f" [BASELINE TRAIN] Completed in {train_time:.2f}s")
 
-            print(f" [BASELINE INFER] Executing prediction on {len(df_test)} rows...")
+            print(f" [BASELINE INFER] Executing prediction on {len(df_test)} rows in chunks...")
             infer_start = time.time()
-            predictions = ml_handler.process_and_predict(rf_model, df_test)
+            
+            # START CHUNKED INFERENCE
+            chunk_size = 20000  
+            all_predictions = []
+            
+            for start_idx in range(0, len(df_test), chunk_size):
+                end_idx = min(start_idx + chunk_size, len(df_test))
+                chunk = df_test.iloc[start_idx:end_idx]
+                
+                chunk_preds = ml_handler.process_and_predict(rf_model, chunk)
+                all_predictions.append(chunk_preds)
+                
+            predictions = np.vstack(all_predictions) if task_type == 'classification' else np.concatenate(all_predictions)
+            # END CHUNKED INFERENCE
+            
             infer_time = time.time() - infer_start
             print(f" [BASELINE INFER] Completed in {infer_time:.2f}s")
 
