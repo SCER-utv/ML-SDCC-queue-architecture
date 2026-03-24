@@ -28,7 +28,7 @@ TARGET_BUCKET = config.get("s3_bucket")
 # =====================================================================
 # BASELINE GRID CONFIGURATION (Modify before running)
 # =====================================================================
-# TARGET_DATASETS = ["airlines", "taxi"]  DECOMMENTARE PER ENTRAMBI I DATASET
+# TARGET_DATASETS = ["airlines", "taxi"]  DECOMMENTARE PER TESTARE ENTRAMBI I DATASET
 TARGET_DATASETS = ["taxi"] 
 TREES_GRID = [50, 100, 200, 300]
 
