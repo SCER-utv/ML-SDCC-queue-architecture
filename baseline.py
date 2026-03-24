@@ -147,7 +147,7 @@ def main():
             infer_start = time.time()
             
             # START CHUNKED INFERENCE
-            chunk_size = 20000  
+            chunk_size = 50000  
             all_predictions = []
             
             for start_idx in range(0, len(df_test), chunk_size):
