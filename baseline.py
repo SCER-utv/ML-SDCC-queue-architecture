@@ -8,7 +8,10 @@ import boto3
 import botocore
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error
+from sklearn.metrics import (
+    roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error,
+    f1_score, precision_score, recall_score, average_precision_score, mean_absolute_percentage_error
+)
 
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
@@ -173,19 +176,44 @@ def main():
                 y_prob = votes_1 / (votes_0 + votes_1)
                 final_prediction = np.argmax(predictions, axis=1)
 
+                # Metriche esistenti
                 auc = roc_auc_score(y_true, y_prob)
                 acc = accuracy_score(y_true, final_prediction)
+                
+                # NUOVE METRICHE PER CLASSIFICAZIONE
+                f1 = f1_score(y_true, final_prediction, zero_division=0)
+                prec = precision_score(y_true, final_prediction, zero_division=0)
+                rec = recall_score(y_true, final_prediction, zero_division=0)
+                pr_auc = average_precision_score(y_true, y_prob)
 
-                print(f" [EVALUATION] ROC-AUC: {auc:.4f} | Accuracy: {acc:.4f}")
-                metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
+                print(f" [EVALUATION] ROC-AUC: {auc:.4f} | PR-AUC: {pr_auc:.4f} | F1: {f1:.4f} | Prec: {prec:.4f} | Rec: {rec:.4f} | Acc: {acc:.4f}")
+                
+                metrics_dict = {
+                    'ROC-AUC': round(auc, 4), 
+                    'PR-AUC': round(pr_auc, 4),
+                    'F1-Score': round(f1, 4),
+                    'Precision': round(prec, 4),
+                    'Recall': round(rec, 4),
+                    'Accuracy': round(acc, 4)
+                }
             else:
+                # Metriche esistenti
                 mse = mean_squared_error(y_true, predictions)
                 rmse = np.sqrt(mse)
                 r2 = r2_score(y_true, predictions)
                 mae = mean_absolute_error(y_true, predictions)
+                
+                # NUOVA METRICA PER REGRESSIONE
+                mape = mean_absolute_percentage_error(y_true, predictions)
 
-                print(f" [EVALUATION] RMSE: {rmse:.4f} | MAE: {mae:.4f} | R2 Score: {r2:.4f}")
-                metrics_dict = {'RMSE': round(rmse, 4), 'MAE': round(mae, 4), 'R2 Score': round(r2, 4)}
+                print(f" [EVALUATION] RMSE: {rmse:.4f} | MAE: {mae:.4f} | MAPE: {mape:.4f} | R2 Score: {r2:.4f}")
+                
+                metrics_dict = {
+                    'RMSE': round(rmse, 4), 
+                    'MAE': round(mae, 4), 
+                    'MAPE': round(mape, 4),
+                    'R2 Score': round(r2, 4)
+                }
 
             save_baseline_metrics(dataset, trees, train_time, infer_time, metrics_dict, config)
 
