@@ -28,25 +28,25 @@ TARGET_BUCKET = config.get("s3_bucket")
 # =====================================================================
 # BASELINE GRID CONFIGURATION (Modify before running)
 # =====================================================================
-TARGET_DATASETS = ["airlines"]
+TARGET_DATASETS = ["airlines", "taxi"]
 TREES_GRID = [25, 50, 75, 100, 150, 200]
 
 # DA MODIFICARE CON I CORRETTI PARAMETRI
 GOLD_STANDARD_PARAMS = {
     "airlines": {
-        #50:  {"max_depth": 20, "min_samples_split": 50, "min_samples_leaf": 5, "max_features": 0.231, "max_samples": 0.598, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
+        50:  {"max_depth": 20, "min_samples_split": 50, "min_samples_leaf": 5, "max_features": 0.231, "max_samples": 0.598, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
         75: {"max_depth": 28, "min_samples_split": 60, "min_samples_leaf": 5, "max_features": 0.2, "max_samples": 0.55, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        #100: {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": 0.234, "max_samples": 0.564, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        #200: {"max_depth": 19, "min_samples_split": 20, "min_samples_leaf": 4, "max_features": 0.300, "max_samples": 0.600, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        #300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.357, "max_samples": 0.539, "criterion": "gini", "class_weight": None, "n_jobs" : -1}
+        100: {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": 0.234, "max_samples": 0.564, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
+        200: {"max_depth": 19, "min_samples_split": 20, "min_samples_leaf": 4, "max_features": 0.300, "max_samples": 0.600, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
+        300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.357, "max_samples": 0.539, "criterion": "gini", "class_weight": None, "n_jobs" : -1}
     },
     "taxi": {
-        #25: {"max_depth": 54, "min_samples_split": 2, "min_samples_leaf": 4, "max_features": 0.52, "max_samples": 0.7, "criterion": "friedman_mse", "n_jobs" : -1},
-        #50:  {"max_depth": 38, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
-        #75:  {"max_depth": 42, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
-        #100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1},
+        25: {"max_depth": 54, "min_samples_split": 2, "min_samples_leaf": 4, "max_features": 0.52, "max_samples": 0.7, "criterion": "friedman_mse", "n_jobs" : -1},
+        50:  {"max_depth": 38, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
+        75:  {"max_depth": 42, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
+        100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1},
         #200: {"max_depth": 60, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
-        150: {"max_depth": 52, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
+        #150: {"max_depth": 52, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
     }
 }
 # =====================================================================
