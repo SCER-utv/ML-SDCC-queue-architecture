@@ -272,6 +272,8 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     num_trees_total = job_data['num_trees']
     dataset = job_data['dataset']
     job_id = job_data['job_id']
+    #added strategy
+    strategy = job_data.get('strategy', 'homogeneous')
 
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
     
@@ -294,7 +296,12 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     trees_remainder = num_trees_total % num_workers
 
     root_dir = config.get('_root_dir', '.')
-    strategies_path = os.path.join(root_dir, 'config', 'worker_strategies.json')
+
+    strategies_path = os.path.join(root_dir, 'config', 'homogeneous_tasks.json')
+    if(strategy == "homogeneous"):
+        strategies_path = os.path.join(root_dir, 'config', 'homogeneous_tasks.json')
+    else:
+        strategies_path = os.path.join(root_dir, 'config', 'heterogeneous_tasks.json')
     
     try:
         with open(strategies_path, 'r') as f:
@@ -307,14 +314,35 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     ml_handler = ModelFactory.get_model(dataset)
     task_type = getattr(ml_handler, 'task_type', 'classification')
 
-    # 3. Safe extraction (zero crashes)
-    str_num = str(num_workers)
-    task_block = all_strategies.get(task_type, {})
-    target_strategies = task_block.get(str_num, [])
+    target_strategies = []
+
+    if strategy == "homogeneous":
+        # Nel file homogeneous navighiamo per: Dataset -> Numero Alberi
+        dataset_params = all_strategies.get(dataset, {})
+        conf = dataset_params.get(str(num_trees_total))
+
+        if conf:
+            # Moltiplichiamo la STESSA configurazione per il numero di worker
+            target_strategies = [conf] * num_workers
+        else:
+            print(f" [INFO WARNING] Nessun Gold Standard per {dataset} con {num_trees_total} alberi.")
+
+    else:
+        # Nel file worker_strategies navighiamo per: Task -> Numero Workers
+        ml_handler = ModelFactory.get_model(dataset)
+        task_type = getattr(ml_handler, 'task_type', 'classification')
+        task_block = all_strategies.get(task_type, {})
+
+        # Prendiamo la lista di configurazioni diverse per N worker
+        target_strategies = task_block.get(str(num_workers), [])
 
     if not target_strategies:
-        print(f" [INFO WARNING] No strict strategy found for {task_type} with {num_workers} workers. Using default.")
-        target_strategies = [{"max_depth": "None", "max_features": "sqrt", "criterion": "gini"}]
+        print(f" [INFO WARNING] Usando parametri di fallback di default.")
+        fallback_conf = {"max_depth": None, "max_features": "sqrt",
+                         "criterion": "gini" if dataset == "airlines" else "squared_error"}
+        target_strategies = [fallback_conf] * num_workers
+
+
     current_skip = 0
 
     print(f" [INFO] Distributing {num_trees_total} trees across {num_workers} training tasks...")
@@ -347,6 +375,15 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             except (ValueError, TypeError):
                 max_features = "sqrt"
 
+
+        max_samples = conf['max_samples']
+
+        try:
+            val_float = float(max_samples)
+            max_samples = val_float
+        except (ValueError, TypeError):
+            max_samples = "1.0"
+
         task_payload = {
             "job_id": job_id,
             "task_id": f"task_{i + 1}",
@@ -354,11 +391,19 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             "dataset": dataset,
             "dataset_s3_path": train_s3_uri,
             "trees": trees,
+            "skip_rows": current_skip,
+            "num_rows": n_rows,
+
+            # Parametri Iper-strutturati
             "max_depth": max_depth,
             "max_features": max_features,
-            "criterion": conf['criterion'],
-            "skip_rows": current_skip,
-            "num_rows": n_rows
+            "criterion": conf.get('criterion'),
+
+            # Nuovi parametri che servono al Gold Standard (uso il .get per evitare crash se mancano in quello eterogeneo)
+            "min_samples_split": conf.get('min_samples_split', 2),
+            "min_samples_leaf": conf.get('min_samples_leaf', 1),
+            "max_samples": max_samples,
+            "n_jobs": conf.get('n_jobs', -1)
         }
 
         current_skip += n_rows
@@ -396,12 +441,13 @@ def parse_s3_uri(s3_uri):
 def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
     s3_client = boto3.client('s3', region_name=AWS_REGION)
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    s3_key = f"results/{dataset}/{dataset}_results.csv"
+    s3_key = f"results/{dataset}/distributed_results.csv"
     
     new_row_df = pd.DataFrame([{
         'Dataset': dataset, 
         'Workers': n_workers, 
-        'Trees': n_trees, 
+        'Trees': n_trees,
+        'System_type': "Distributed",
         'Strategy': strategy_name, 
         'Train_Time': round(train_time, 2), 
         'Infer_Time': round(inf_time, 2), 
@@ -431,7 +477,7 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
 
 
 # Downloads partial inferences, executes majority vote/averaging, and calculates global metrics.
-def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_workers, trees, weights, train_time, infer_time):
+def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_workers, trees, weights, train_time, infer_time, strategy):
     print("\n" + "=" * 50)
     print(" FINAL AGGREGATION & EVALUATION PHASE")
     print("=" * 50)
@@ -503,12 +549,14 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
 
     print("=" * 50 + "\n")
 
+    strategy_name = "Homogeneous" if strategy == "homogeneous" else "Heterogeneous"
+
     # 4. Save on S3
     save_metrics(
         dataset=dataset_name, 
         n_workers=num_workers, 
         n_trees=trees, 
-        strategy_name="SQS_Async", 
+        strategy_name=strategy_name,
         train_time=train_time, 
         inf_time=infer_time, 
         metrics_dict=metrics_dict, 
@@ -614,7 +662,9 @@ def main():
                         print(f" [RECOVERY] Current state: {len(completed_train_tasks)} Train and {len(s3_inference_results)} Infer tasks complete.")
         
                     # 2. PROVISIONING (Idempotent)
+                    #scommenta delay per test veloci, è usato per spegnere bene le macchine e poi partire con le code, per evitare problemi
                     scale_worker_infrastructure(num_workers)
+                    time.sleep(10)
 
                     # =========================================================
                     # PLUGGABLE BLOCK: DYNAMIC DATA SPLIT
@@ -626,11 +676,12 @@ def main():
                     calculated_train_rows = None
 
                     if not tasks_dispatched:
-                        if True:
+                        #metti false qui sotto per usare test e train su s3
+                        if False:
                         # DECOMMENTARE RIGA SOPRA PER EVITARE LO SPLITTING if job_data.get('dynamic_split', True):
                             try:
                                 print(f" [PIPELINE] Client requested dataset streaming split...")
-                                calculated_train_rows = execute_streaming_split(dataset) 
+                                calculated_train_rows = execute_streaming_split(dataset)
                             except Exception as e:
                                 print(f" [CRITICAL] Split execution failed: {e}")
                                 scale_worker_infrastructure(0) 
@@ -704,7 +755,8 @@ def main():
                         inference_time = time.time() - total_start_time
                         
                     print("\n [PIPELINE] All Workers completed their end-to-end tasks!")
-                    scale_worker_infrastructure(0)
+                    #commenta riga sotto per test veloci
+                    #scale_worker_infrastructure(0)
                     
                     total_run_time = time.time() - total_start_time
         
@@ -715,7 +767,7 @@ def main():
                         for i in range(num_workers):
                             weights.append(trees_per_worker + (1 if i < trees_remainder else 0))
 
-                        aggregate_and_evaluate(job_id, dataset, s3_inference_results, num_workers, job_data['num_trees'], weights, training_time, inference_time)
+                        aggregate_and_evaluate(job_id, dataset, s3_inference_results, num_workers, job_data['num_trees'], weights, training_time, inference_time, job_data.get('strategy', 'homogeneous'))
                     except Exception as e:
                         print(f" [EVALUATION ERROR] Final aggregation failed: {e}")
                         
@@ -770,6 +822,8 @@ def main():
                                 sqs_client.delete_message(QueueUrl=INFER_RESPONSE_QUEUE, ReceiptHandle=msg['ReceiptHandle'])
                                 
                     pure_inference_time = time.time() - inference_pure_start
+
+                    #commenta la riga soto per test veloci e scommenta il delay
                     scale_worker_infrastructure(0)
                     
                     # Real-Time Aggregation

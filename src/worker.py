@@ -259,7 +259,7 @@ def main():
                 infer_response = {
                     "job_id": infer_task_data['job_id'],
                     "task_id": infer_task_data['task_id'],
-                    "s3_voti_uri": s3_voti_uri
+                    "s3_voti_uri": s3_votes_uri
                 }
                 sqs_client.send_message(QueueUrl=INFER_RESPONSE_QUEUE, MessageBody=json.dumps(infer_response))
 

@@ -93,6 +93,18 @@ def main():
             except ValueError:
                 print(" Invalid input. Please enter integers only.")
 
+        # AGGIUNTA: Scelta della Strategia (Homogeneous vs Heterogeneous)
+        print("\n Select Training Strategy:")
+        print("  1) Homogeneous  [Same parameters for all workers]")
+        print("  2) Heterogeneous [Different parameters per worker, variance boosting]")
+
+        while True:
+            strat_choice = input(" Enter 1 or 2: ").strip()
+            if strat_choice in ['1', '2']:
+                strategy_type = "homogeneous" if strat_choice == '1' else "heterogeneous"
+                break
+            print(" Invalid choice. Please enter 1 or 2.")
+
         # Generate a unique and descriptive Job ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         job_id = f"job_{dataset}_{trees}trees_{workers}workers_{timestamp}"
@@ -102,7 +114,8 @@ def main():
             "job_id": job_id,
             "dataset": dataset,
             "num_workers": workers,
-            "num_trees": trees
+            "num_trees": trees,
+            "strategy": strategy_type
         }
 
     elif mode == 'infer':

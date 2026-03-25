@@ -10,16 +10,35 @@ class ClassificationModel(BaseModel):
         self.task_type = 'classification'
 
     def process_and_train(self, df, params):
-        print(f" Training {params['trees']} trees. (Depth: {params['max_depth']} | Max features: {params['max_features']} | Criterion: {params['criterion']})")
+        # 1. Estrazione sicura dei parametri (usa i default di scikit-learn se mancano)
+        n_estimators = params.get('trees', 100)
+        max_depth = params.get('max_depth', None)
+        max_features = params.get('max_features', 'sqrt')
+        criterion = params.get('criterion', 'gini')
+        random_state = params.get('seed', 42)
+
+        # I nuovi parametri del Gold Standard!
+        min_samples_split = params.get('min_samples_split', 2)
+        min_samples_leaf = params.get('min_samples_leaf', 1)
+        max_samples = params.get('max_samples', 1.0)
+        class_weight = params.get('class_weight', None)
+        n_jobs = params.get('n_jobs', -1)
+
+        print(f" Training {n_estimators} trees (Depth: {max_depth} | Split: {min_samples_split} | Leaf: {min_samples_leaf} | Feat: {max_features})")
         X = df.drop(columns=[self.target_column])
         y = df[self.target_column]
 
         rf = RandomForestClassifier(
-            n_estimators=params['trees'],
-            max_depth=params['max_depth'],
-            max_features=params['max_features'],
-            criterion=params['criterion'],
-            random_state=params['seed']
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            max_features=max_features,
+            criterion=criterion,
+            random_state=random_state,
+            min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,
+            max_samples=max_samples,
+            class_weight=class_weight,
+            n_jobs=n_jobs
         )
         rf.fit(X, y)
         return rf
