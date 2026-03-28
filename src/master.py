@@ -545,7 +545,13 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         print(f" RMSE: {rmse:.4f}")
         print(f" MAE: {mae:.4f}") 
         print(f" R2 Score: {r2:.4f}")
-        metrics_dict = {'RMSE': round(rmse, 4), 'MAE': round(mae, 4), 'R2 Score': round(r2, 4)}
+        
+        # Forced conversion to standard Python float in order to obtain a numeric value in the CSV (instead of numpy.float64)
+        metrics_dict = {
+            'RMSE': float(round(rmse, 4)), 
+            'MAE': float(round(mae, 4)), 
+            'R2 Score': float(round(r2, 4))
+        }
 
     print("=" * 50 + "\n")
 
