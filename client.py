@@ -107,7 +107,8 @@ def main():
 
         # Generate a unique and descriptive Job ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        job_id = f"job_{dataset}_{trees}trees_{workers}workers_{timestamp}"
+        # Ex: job_taxi_100trees_4workers_homogeneous_20260328_180000
+        job_id = f"job_{dataset}_{trees}trees_{workers}workers_{strategy_type}_{timestamp}"
         
         payload = {
             "mode": "train",
@@ -130,28 +131,44 @@ def main():
             
         print("\n=== AVAILABLE MODELS ===")
         for i, m in enumerate(models):
-            # Split the Job ID string to extract metadata (trees, workers, date, time)
+            # Dividiamo la stringa usando l'underscore per estrarre i metadati
             parts = m.split('_')
             try:
-                # Format: job_{dataset}_{trees}trees_{workers}workers_{date}_{time}
-                if "workers" in m:
+                # 1. NUOVO FORMATO (Con Strategia)
+                # Es: job_taxi_100trees_4workers_homogeneous_20260328_180000
+                if "homogeneous" in m or "heterogeneous" in m:
                     trees_count = parts[2].replace('trees', '')
                     workers_count = parts[3].replace('workers', '')
+                    strat_label = parts[4][:4].upper() # Prende le prime 4 lettere: "HOMO" o "HETE"
+                    raw_date = parts[5]
+                    raw_time = parts[6]
+                    
+                # 2. VECCHIO FORMATO (Senza Strategia, ma con i worker)
+                # Es: job_taxi_100trees_4workers_20260328_180000
+                elif "workers" in m:
+                    trees_count = parts[2].replace('trees', '')
+                    workers_count = parts[3].replace('workers', '')
+                    strat_label = "N/A " # Forziamo "N/A " per allineamento
                     raw_date = parts[4]
                     raw_time = parts[5]
-                # Legacy format fallback
+                    
+                # 3. LEGACY FORMAT (Vecchissimo formato senza worker)
+                # Es: job_taxi_100trees_20260328_180000
                 else:
                     trees_count = parts[2].replace('trees', '')
-                    workers_count = "?" 
+                    workers_count = "? " 
+                    strat_label = "N/A "
                     raw_date = parts[3]
                     raw_time = parts[4]
                     
+                # Formattazione per la stampa a schermo
                 date_formatted = f"{raw_date[6:8]}/{raw_date[4:6]}/{raw_date[0:4]}"
                 time_formatted = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}"
                 
-                print(f"  [{i}]  Trees: {trees_count:<4} |  Workers: {workers_count:<2} |  Date: {date_formatted} {time_formatted}  (ID: {m})")
-                # If parsing fails due to manual renaming, just print the raw S3 folder name
+                print(f"  [{i}]  Trees: {trees_count:<4} | Workers: {workers_count:<2} | Strat: {strat_label} | Date: {date_formatted} {time_formatted}  (ID: {m})")
+                
             except Exception:
+                # Se la cartella ha un nome manuale o un formato illeggibile, la stampiamo "grezza" senza far crashare il Client
                 print(f"  [{i}] {m}")
         
         while True:
