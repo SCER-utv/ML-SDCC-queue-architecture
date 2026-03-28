@@ -529,7 +529,10 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         print(f"\n GLOBAL DISTRIBUTED RESULTS:")
         print(f" ROC-AUC: {auc:.4f}")
         print(f" Accuracy: {acc:.4f}")
-        metrics_dict = {'ROC-AUC': round(auc, 4), 'Accuracy': round(acc, 4)}
+        metrics_dict = {
+            'ROC-AUC': float(round(auc, 4)), 
+            'Accuracy': float(round(acc, 4))
+        }
 
     else:
         # REGRESSION (The shape is N_rows)
@@ -568,6 +571,9 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         metrics_dict=metrics_dict, 
         config=config
     )
+    
+    # 5. S3 Garbage Collection
+    cleanup_s3_inference_files(s3_inference_results)
 
 
 # Retrieves current job status from DynamoDB for fault tolerance recovery
@@ -612,6 +618,22 @@ def update_job_state(job_id, completed_train_set, completed_infer_dict, start_ti
         'tempo_inferenza': str(inference_time)
     })
 
+# Delete temporary .npy files from S3 after aggregation
+def cleanup_s3_inference_files(s3_inference_results):
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    print(" [CLEANUP] Eliminazione dei file temporanei .npy da S3...")
+    deleted_count = 0
+    
+    for task_id, s3_uri in s3_inference_results.items():
+        try:
+            bucket, key = parse_s3_uri(s3_uri)
+            s3.delete_object(Bucket=bucket, Key=key)
+            deleted_count += 1
+        except Exception as e:
+            print(f" [CLEANUP ERROR] Impossibile eliminare {s3_uri}: {e}")
+            
+    print(f" [CLEANUP] Rimossi {deleted_count} file temporanei con successo.")
+    
 # ==========================================
 # MASTER EVENT LOOP
 # ==========================================
