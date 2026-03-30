@@ -10,7 +10,7 @@ import boto3
 import botocore
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error
+from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error, r2_score, mean_absolute_error, precision_score, recall_score, f1_score
 
 from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
@@ -537,15 +537,26 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         y_prob = votes_1 / (votes_0 + votes_1)
         final_prediction = np.argmax(total_votes, axis=1)
 
+        # Calcolo di TUTTE le metriche di classificazione
         auc = roc_auc_score(y_true, y_prob)
         acc = accuracy_score(y_true, final_prediction)
+        precision = precision_score(y_true, final_prediction, zero_division=0)
+        recall = recall_score(y_true, final_prediction, zero_division=0)
+        f1 = f1_score(y_true, final_prediction, zero_division=0)
 
         print(f"\n GLOBAL DISTRIBUTED RESULTS:")
-        print(f" ROC-AUC: {auc:.4f}")
-        print(f" Accuracy: {acc:.4f}")
+        print(f" ROC-AUC:   {auc:.4f}")
+        print(f" Accuracy:  {acc:.4f}")
+        print(f" Precision: {precision:.4f}")
+        print(f" Recall:    {recall:.4f}")
+        print(f" F1-Score:  {f1:.4f}")
+        
         metrics_dict = {
             'ROC-AUC': float(round(auc, 4)), 
-            'Accuracy': float(round(acc, 4))
+            'Accuracy': float(round(acc, 4)),
+            'Precision': float(round(precision, 4)),
+            'Recall': float(round(recall, 4)),
+            'F1-Score': float(round(f1, 4))
         }
 
     else:
