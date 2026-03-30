@@ -403,6 +403,7 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             "min_samples_split": conf.get('min_samples_split', 2),
             "min_samples_leaf": conf.get('min_samples_leaf', 1),
             "max_samples": max_samples,
+            "class_weight": conf.get('class_weight', None),
             "n_jobs": conf.get('n_jobs', -1)
         }
 
