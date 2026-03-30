@@ -436,42 +436,55 @@ def parse_s3_uri(s3_uri):
     parts = s3_uri.replace("s3://", "").split("/", 1)
     return parts[0], parts[1]
 
-
 # Appends final job metrics to a persistent S3 CSV file
 def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
     s3_client = boto3.client('s3', region_name=AWS_REGION)
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
     s3_key = f"results/{dataset}/distributed_results.csv"
     
-    new_row_df = pd.DataFrame([{
+    # 1. Create the base row dictionary with standard information
+    row_data = {
         'Dataset': dataset, 
         'Workers': n_workers, 
         'Trees': n_trees,
         'System_type': "Distributed",
         'Strategy': strategy_name, 
         'Train_Time': round(train_time, 2), 
-        'Infer_Time': round(inf_time, 2), 
-        'Metrics': str(metrics_dict)
-    }])
+        'Infer_Time': round(inf_time, 2)
+    }
+    
+    # 2. Unpack the metrics!
+    # This command takes the keys (e.g., 'RMSE', 'MAE', 'R2 Score') and 
+    # automatically transforms them into distinct columns within the row.
+    row_data.update(metrics_dict)
+    
+    new_row_df = pd.DataFrame([row_data])
 
     try:
-        # Attempt to download the existing CSV from S3.
+        # Attempt to download the existing CSV from S3
         obj = s3_client.get_object(Bucket=target_bucket, Key=s3_key)
-        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()))
-        # If it exists, append the new row 
+        
+        # CRITICAL: Instruct Pandas to read the "Excel-style" formatted file 
+        # (using semicolon as separator and comma for decimals)
+        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()), sep=';', decimal=',')
+        
+        # If it exists, append the new row at the end
         df_final = pd.concat([df_existing, new_row_df], ignore_index=True)
         
     except botocore.exceptions.ClientError as e:
-        # If the file does not exist, the final file will contain only the new row
+        # If the file does not exist on S3 yet, the final file will consist only of the current row
         if e.response['Error']['Code'] == 'NoSuchKey':
             df_final = new_row_df
         else:
             print(f" [METRICS ERROR] Unexpected S3 error: {e}")
             return
             
-    # Save the updated file by overwriting it on S3
+    # Prepare the buffer to overwrite the updated file on S3
     csv_buffer = io.StringIO()
-    df_final.to_csv(csv_buffer, index=False)
+    
+    # CRITICAL: Save the CSV maintaining perfect formatting for Excel 
+    df_final.to_csv(csv_buffer, index=False, sep=';', decimal=',')
+    
     s3_client.put_object(Bucket=target_bucket, Key=s3_key, Body=csv_buffer.getvalue())
     print(f" [METRICS] Results securely appended to: s3://{target_bucket}/{s3_key}")
 
