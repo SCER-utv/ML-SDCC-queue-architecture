@@ -56,18 +56,29 @@ s3_client = boto3.client('s3', region_name=AWS_REGION)
 
 def save_baseline_metrics(dataset, n_trees, train_time, inf_time, metrics_dict, config):
     s3_key = f"results/{dataset}/{dataset}_baseline_results.csv"
-    new_row_df = pd.DataFrame([{
+    
+    # 1. Create the base row dictionary with standard information
+    row_data = {
         'Dataset': dataset, 
         'Trees': n_trees, 
         'Train_Time': round(train_time, 2), 
-        'Infer_Time': round(inf_time, 2), 
-        'Metrics': str(metrics_dict)
-    }])
+        'Infer_Time': round(inf_time, 2)
+    }
+    
+    # 2. Unpack metrics into the base dictionary
+    # This will automatically expand RMSE, F1, Accuracy, etc. into separate columns
+    row_data.update(metrics_dict)
+    
+    new_row_df = pd.DataFrame([row_data])
 
     try:
+        # Attempt to download the existing file
         obj = s3_client.get_object(Bucket=TARGET_BUCKET, Key=s3_key)
-        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()))
+        
+        # CRITICAL: Read the CSV formatted "Excel-style"
+        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()), sep=';', decimal=',')
         df_final = pd.concat([df_existing, new_row_df], ignore_index=True)
+        
     except botocore.exceptions.ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
             df_final = new_row_df
@@ -76,7 +87,10 @@ def save_baseline_metrics(dataset, n_trees, train_time, inf_time, metrics_dict, 
             return
             
     csv_buffer = io.StringIO()
-    df_final.to_csv(csv_buffer, index=False)
+    
+    # CRITICAL: Save the CSV while preserving Excel-friendly formatting
+    df_final.to_csv(csv_buffer, index=False, sep=';', decimal=',')
+    
     s3_client.put_object(Bucket=TARGET_BUCKET, Key=s3_key, Body=csv_buffer.getvalue())
     print(f" [METRICS] Baseline results securely appended to: s3://{TARGET_BUCKET}/{s3_key}")
 
