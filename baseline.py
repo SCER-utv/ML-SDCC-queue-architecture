@@ -37,19 +37,17 @@ TREES_GRID = [25, 50, 75, 100, 150, 200, 300]
 # DA MODIFICARE CON I CORRETTI PARAMETRI
 GOLD_STANDARD_PARAMS = {
     "airlines": {
-        50:  {"max_depth": 20, "min_samples_split": 50, "min_samples_leaf": 5, "max_features": 0.231, "max_samples": 0.598, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        75: {"max_depth": 28, "min_samples_split": 60, "min_samples_leaf": 5, "max_features": 0.2, "max_samples": 0.55, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        100: {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": 0.234, "max_samples": 0.564, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        200: {"max_depth": 19, "min_samples_split": 20, "min_samples_leaf": 4, "max_features": 0.300, "max_samples": 0.600, "criterion": "gini", "class_weight": None, "n_jobs" : -1},
-        300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.357, "max_samples": 0.539, "criterion": "gini", "class_weight": None, "n_jobs" : -1}
+        50:  {"max_depth": 20, "min_samples_split": 50, "min_samples_leaf": 5, "max_features": 0.231, "max_samples": 0.598, "criterion": "gini", "class_weight": "balanced", "n_jobs" : -1},
+        75: {"max_depth": 28, "min_samples_split": 60, "min_samples_leaf": 5, "max_features": 0.2, "max_samples": 0.55, "criterion": "gini", "class_weight": "balanced", "n_jobs" : -1},
+        100: {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": 0.234, "max_samples": 0.564, "criterion": "gini", "class_weight": "balanced", "n_jobs" : -1},
+        200: {"max_depth": 19, "min_samples_split": 20, "min_samples_leaf": 4, "max_features": 0.300, "max_samples": 0.600, "criterion": "gini", "class_weight": "balanced", "n_jobs" : -1},
+        300: {"max_depth": 20, "min_samples_split": 45, "min_samples_leaf": 6, "max_features": 0.357, "max_samples": 0.539, "criterion": "gini", "class_weight": "balanced", "n_jobs" : -1}
     },
     "taxi": {
         25: {"max_depth": 54, "min_samples_split": 2, "min_samples_leaf": 4, "max_features": 0.52, "max_samples": 0.7, "criterion": "friedman_mse", "n_jobs" : -1},
         50:  {"max_depth": 38, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
         75:  {"max_depth": 42, "min_samples_split": 2, "min_samples_leaf": 2, "max_features": "sqrt", "max_samples": 0.9, "criterion": "friedman_mse", "n_jobs" : -1},
-        100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1},
-        #200: {"max_depth": 60, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
-        #150: {"max_depth": 52, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
+        100: {"max_depth": 48, "min_samples_split": 2, "min_samples_leaf": 3, "max_features": 0.5, "max_samples": 1.0, "criterion": "friedman_mse", "n_jobs" : -1}
     }
 }
 # =====================================================================
@@ -58,18 +56,29 @@ s3_client = boto3.client('s3', region_name=AWS_REGION)
 
 def save_baseline_metrics(dataset, n_trees, train_time, inf_time, metrics_dict, config):
     s3_key = f"results/{dataset}/{dataset}_baseline_results.csv"
-    new_row_df = pd.DataFrame([{
+    
+    # 1. Create the base row dictionary with standard information
+    row_data = {
         'Dataset': dataset, 
         'Trees': n_trees, 
         'Train_Time': round(train_time, 2), 
-        'Infer_Time': round(inf_time, 2), 
-        'Metrics': str(metrics_dict)
-    }])
+        'Infer_Time': round(inf_time, 2)
+    }
+    
+    # 2. Unpack metrics into the base dictionary
+    # This will automatically expand RMSE, F1, Accuracy, etc. into separate columns
+    row_data.update(metrics_dict)
+    
+    new_row_df = pd.DataFrame([row_data])
 
     try:
+        # Attempt to download the existing file
         obj = s3_client.get_object(Bucket=TARGET_BUCKET, Key=s3_key)
-        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()))
+        
+        # CRITICAL: Read the CSV formatted "Excel-style"
+        df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()), sep=';', decimal=',')
         df_final = pd.concat([df_existing, new_row_df], ignore_index=True)
+        
     except botocore.exceptions.ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
             df_final = new_row_df
@@ -78,7 +87,10 @@ def save_baseline_metrics(dataset, n_trees, train_time, inf_time, metrics_dict, 
             return
             
     csv_buffer = io.StringIO()
-    df_final.to_csv(csv_buffer, index=False)
+    
+    # CRITICAL: Save the CSV while preserving Excel-friendly formatting
+    df_final.to_csv(csv_buffer, index=False, sep=';', decimal=',')
+    
     s3_client.put_object(Bucket=TARGET_BUCKET, Key=s3_key, Body=csv_buffer.getvalue())
     print(f" [METRICS] Baseline results securely appended to: s3://{TARGET_BUCKET}/{s3_key}")
 
