@@ -214,7 +214,7 @@ def execute_streaming_split(dataset_name):
     bucket = config.get("s3_bucket")
 
     # DA MODIFICARE
-    source_key = f"data/interim/{dataset_name}/{dataset_name}_1M.csv"
+    source_key = f"data/interim/{dataset_name}/{dataset_name}_optimized.csv"
     train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
     test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
     
