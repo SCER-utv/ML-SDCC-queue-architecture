@@ -16,9 +16,6 @@ from src.model.model_factory import ModelFactory
 from src.utils.config import load_config
 
 
-# ==========================================
-# DYNAMIC CONFIGURATION
-# ==========================================
 config = load_config()
 
 AWS_REGION = config.get("aws_region")
@@ -205,21 +202,27 @@ def execute_streaming_split(dataset_name):
 
 
 # Downloads dataset via S3 and randomly splits it into Train and Test set, then uploads them back to S3.
-def execute_streaming_split(dataset_name):
+def execute_streaming_split(dataset_name, dataset_variant):
+    config = load_config()
     ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
     train_threshold = ratios.get("train", 0.70)
-    
-    print(f" [SPLIT] Starting 2-way dynamic streaming split for '{dataset_name}'...")
+
+    print(f" [SPLIT] Starting dynamic streaming split for '{dataset_name}' (Variant: {dataset_variant})...")
     s3 = boto3.client('s3', region_name=AWS_REGION)
     bucket = config.get("s3_bucket")
 
-    # DA MODIFICARE
-    source_key = f"data/interim/{dataset_name}/{dataset_name}_1M.csv"
-    train_key = f"data/processed/{dataset_name}/{dataset_name}_train.csv"
-    test_key = f"data/processed/{dataset_name}/{dataset_name}_test.csv"
-    
-    local_train = f"/tmp/{dataset_name}_train.csv"
-    local_test = f"/tmp/{dataset_name}_test.csv"
+    # Recupero dinamico dal nuovo config annidato
+    metadata = config['datasets_metadata'].get(dataset_name, {}).get(dataset_variant)
+    if not metadata:
+        raise ValueError(f"Metadata not found for {dataset_name}_{dataset_variant}")
+
+    source_key = metadata['interim_path']
+    train_key = metadata['train_path']
+    test_key = metadata['test_path']
+
+    # Aggiungiamo un identificativo robusto (es. il variant) ai file temporanei per evitare collisioni!
+    local_train = f"/tmp/{dataset_name}_{dataset_variant}_train.csv"
+    local_test = f"/tmp/{dataset_name}_{dataset_variant}_test.csv"
     
     try:
         print(f" [SPLIT] Line-by-line streaming in progress...")
@@ -232,6 +235,7 @@ def execute_streaming_split(dataset_name):
             
             # Read the header cleanly
             header = safe_streaming.readline()
+            # Add the header on both files
             f_train.write(header)
             f_test.write(header)
             
@@ -264,23 +268,40 @@ def execute_streaming_split(dataset_name):
     print(f" [SPLIT] Operation completed successfully.")
     return train_rows
 
+def check_s3_file_exists(bucket, key):
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == "404":
+            return False
+        raise e
+
 
 # Calculates dataset splits based on total rows and generates SQS payloads for worker nodes.
 def generate_initial_training_tasks(job_data, total_rows=None):
     config = load_config()
+    # Get job details
     num_workers = job_data['num_workers']
     num_trees_total = job_data['num_trees']
     dataset = job_data['dataset']
+    dataset_variant = job_data.get('dataset_size', '1M')
     job_id = job_data['job_id']
-    #added strategy
     strategy = job_data.get('strategy', 'homogeneous')
 
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    
-    train_s3_key = config['datasets_metadata'][dataset]['train_path']
+
+    # Retrieving metadata for dataset variant
+    metadata = config['datasets_metadata'].get(dataset, {}).get(dataset_variant)
+    if not metadata:
+        print(f" [INFO CRITICAL] Dataset variant '{dataset_variant}' not found for '{dataset}'. Aborting.")
+        return
+
+    train_s3_key = metadata['train_path']
     train_s3_uri = f"s3://{target_bucket}/{train_s3_key}"
 
-    # 1. Count the number of rows: Use the provided parameter or perform an S3 query.
+    # Count the number of rows: Use the provided parameter or perform an S3 query.
     if total_rows is None:
         try:
             print(" [INFO] Total rows missing in cache. Triggering S3 Select fallback...")
@@ -289,6 +310,8 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             print(" [INFO CRITICAL] S3 Select fallback failed. Aborting.")
             return
 
+
+    # Calculating single worker task data
     rows_per_worker = total_rows // num_workers
     remainder_rows = total_rows % num_workers
 
@@ -310,34 +333,32 @@ def generate_initial_training_tasks(job_data, total_rows=None):
         print(f" [INFO ERROR] Missing strategies file: {strategies_path}")
         all_strategies = {}
 
-    # 2. Determine whether the dataet is for classification or regression
+    # Determine whether the dataset is for classification or regression
     ml_handler = ModelFactory.get_model(dataset)
     task_type = getattr(ml_handler, 'task_type', 'classification')
 
     target_strategies = []
 
     if strategy == "homogeneous":
-        # Nel file homogeneous navighiamo per: Dataset -> Numero Alberi
+        # Look for dataset, number of trees, in the specified configuration file
         dataset_params = all_strategies.get(dataset, {})
         conf = dataset_params.get(str(num_trees_total))
 
         if conf:
-            # Moltiplichiamo la STESSA configurazione per il numero di worker
+            # Generate same strategy for all workers
             target_strategies = [conf] * num_workers
         else:
-            print(f" [INFO WARNING] Nessun Gold Standard per {dataset} con {num_trees_total} alberi.")
+            print(f" [INFO WARNING] No Gold Standard for {dataset} with {num_trees_total} trees.")
 
     else:
-        # Nel file worker_strategies navighiamo per: Task -> Numero Workers
-        ml_handler = ModelFactory.get_model(dataset)
-        task_type = getattr(ml_handler, 'task_type', 'classification')
-        task_block = all_strategies.get(task_type, {})
+        # Look for
+        dataset_params = all_strategies.get(dataset, {})
 
-        # Prendiamo la lista di configurazioni diverse per N worker
-        target_strategies = task_block.get(str(num_workers), [])
+        # Get the strategy for the specified number of workers
+        target_strategies = dataset_params.get(str(num_workers), [])
 
     if not target_strategies:
-        print(f" [INFO WARNING] Usando parametri di fallback di default.")
+        print(f" [INFO WARNING] Using fallback params.")
         fallback_conf = {"max_depth": None, "max_features": "sqrt",
                          "criterion": "gini" if dataset == "airlines" else "squared_error"}
         target_strategies = [fallback_conf] * num_workers
@@ -377,7 +398,6 @@ def generate_initial_training_tasks(job_data, total_rows=None):
 
 
         max_samples = conf['max_samples']
-
         try:
             val_float = float(max_samples)
             max_samples = val_float
@@ -394,12 +414,10 @@ def generate_initial_training_tasks(job_data, total_rows=None):
             "skip_rows": current_skip,
             "num_rows": n_rows,
 
-            # Parametri Iper-strutturati
+            # Specific parameters
             "max_depth": max_depth,
             "max_features": max_features,
             "criterion": conf.get('criterion'),
-
-            # Nuovi parametri che servono al Gold Standard (uso il .get per evitare crash se mancano in quello eterogeneo)
             "min_samples_split": conf.get('min_samples_split', 2),
             "min_samples_leaf": conf.get('min_samples_leaf', 1),
             "max_samples": max_samples,
@@ -413,19 +431,21 @@ def generate_initial_training_tasks(job_data, total_rows=None):
 
 
 # Enqueues inference tasks mapped to completed training chunks
-def generate_inference_tasks(job_id, train_resp, dataset):
+def generate_inference_tasks(job_id, train_resp, dataset, dataset_variant):
+    # Get train task details
     task_id = train_resp['task_id']
     model_s3_uri = train_resp['s3_model_uri']
 
     config = load_config()
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    test_s3_key = config['datasets_metadata'][dataset]['test_path']
+    test_s3_key = config['datasets_metadata'][dataset][dataset_variant]['test_path']
     test_s3_uri = f"s3://{target_bucket}/{test_s3_key}"
 
     infer_task = {
         "job_id": job_id,
         "task_id": task_id,
         "dataset": dataset,
+        "dataset_variant": dataset_variant,
         "test_dataset_uri": test_s3_uri,
         "model_s3_uri": model_s3_uri  
     }
@@ -438,14 +458,15 @@ def parse_s3_uri(s3_uri):
     return parts[0], parts[1]
 
 # Appends final job metrics to a persistent S3 CSV file
-def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
+def save_metrics(dataset, dataset_variant, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
     s3_client = boto3.client('s3', region_name=AWS_REGION)
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    s3_key = f"results/{dataset}/distributed_results.csv"
+    s3_key = f"results/{dataset}/{dataset_variant}/distributed_results.csv"
     
     # 1. Create the base row dictionary with standard information
     row_data = {
-        'Dataset': dataset, 
+        'Dataset': dataset,
+        'Variant': dataset_variant,
         'Workers': n_workers, 
         'Trees': n_trees,
         'System_type': "Distributed",
@@ -465,7 +486,7 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
         # Attempt to download the existing CSV from S3
         obj = s3_client.get_object(Bucket=target_bucket, Key=s3_key)
         
-        # CRITICAL: Instruct Pandas to read the "Excel-style" formatted file 
+        # Instruct Pandas to read the "Excel-style" formatted file
         # (using semicolon as separator and comma for decimals)
         df_existing = pd.read_csv(io.BytesIO(obj['Body'].read()), sep=';', decimal=',')
         
@@ -483,7 +504,7 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
     # Prepare the buffer to overwrite the updated file on S3
     csv_buffer = io.StringIO()
     
-    # CRITICAL: Save the CSV maintaining perfect formatting for Excel 
+    # Save the CSV maintaining perfect formatting for Excel
     df_final.to_csv(csv_buffer, index=False, sep=';', decimal=',')
     
     s3_client.put_object(Bucket=target_bucket, Key=s3_key, Body=csv_buffer.getvalue())
@@ -491,7 +512,7 @@ def save_metrics(dataset, n_workers, n_trees, strategy_name, train_time, inf_tim
 
 
 # Downloads partial inferences, executes majority vote/averaging, and calculates global metrics.
-def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_workers, trees, weights, train_time, infer_time, strategy):
+def aggregate_and_evaluate(job_id, dataset_name, dataset_variant, s3_inference_results, num_workers, trees, weights, train_time, infer_time, strategy):
     print("\n" + "=" * 50)
     print(" FINAL AGGREGATION & EVALUATION PHASE")
     print("=" * 50)
@@ -502,7 +523,7 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
     s3 = boto3.client('s3')
     config = load_config()
 
-    # 1. Download all the .npy files from the workers
+    # Download all the .npy files from the workers
     predictions_list = []
     print(f" Downloading {len(s3_inference_results)} inference result files from S3...")
 
@@ -515,16 +536,16 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         predictions_list.append(result_array)
         os.remove(local_path)
 
-    # 2. Downloads the real values from the test set
+    # Downloads the real values from the test set
     target_col = ml_handler.target_column
-    test_s3_key = config['datasets_metadata'][dataset_name]['test_path']
+    test_s3_key = config['datasets_metadata'][dataset_name][dataset_variant]['test_path']
     test_s3_uri = f"s3://{config.get('s3_bucket')}/{test_s3_key}"
 
     print(f" Reading Ground Truth from column '{target_col}'...")
     df_test = pd.read_csv(test_s3_uri, usecols=[target_col])
     y_true = df_test[target_col].values
 
-    # 3. Aggregation
+    # Aggregation
     data_shape = predictions_list[0].shape
     
     if len(data_shape) == 2:
@@ -537,7 +558,7 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         y_prob = votes_1 / (votes_0 + votes_1)
         final_prediction = np.argmax(total_votes, axis=1)
 
-        # Calcolo di TUTTE le metriche di classificazione
+        # Calculating all evaluation metrics
         auc = roc_auc_score(y_true, y_prob)
         acc = accuracy_score(y_true, final_prediction)
         precision = precision_score(y_true, final_prediction, zero_division=0)
@@ -564,6 +585,7 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         print(" [EVALUATION] Regression task detected. Executing Weighted Averaging...")
         y_pred = np.average(predictions_list, axis=0, weights=weights)
 
+        # Calculating all evaluation metrics
         mse = mean_squared_error(y_true, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_true, y_pred)
@@ -573,8 +595,7 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
         print(f" RMSE: {rmse:.4f}")
         print(f" MAE: {mae:.4f}") 
         print(f" R2 Score: {r2:.4f}")
-        
-        # Forced conversion to standard Python float in order to obtain a numeric value in the CSV (instead of numpy.float64)
+
         metrics_dict = {
             'RMSE': float(round(rmse, 4)), 
             'MAE': float(round(mae, 4)), 
@@ -585,9 +606,10 @@ def aggregate_and_evaluate(job_id, dataset_name, s3_inference_results, num_worke
 
     strategy_name = "Homogeneous" if strategy == "homogeneous" else "Heterogeneous"
 
-    # 4. Save on S3
+    # Save on S3
     save_metrics(
-        dataset=dataset_name, 
+        dataset=dataset_name,
+        dataset_variant=dataset_variant,
         n_workers=num_workers, 
         n_trees=trees, 
         strategy_name=strategy_name,
@@ -646,7 +668,7 @@ def update_job_state(job_id, completed_train_set, completed_infer_dict, start_ti
 # Delete temporary .npy files from S3 after aggregation
 def cleanup_s3_inference_files(s3_inference_results):
     s3 = boto3.client('s3', region_name=AWS_REGION)
-    print(" [CLEANUP] Eliminazione dei file temporanei .npy da S3...")
+    print(" [CLEANUP] Deleting temporary .npy from S3...")
     deleted_count = 0
     
     for task_id, s3_uri in s3_inference_results.items():
@@ -655,13 +677,11 @@ def cleanup_s3_inference_files(s3_inference_results):
             s3.delete_object(Bucket=bucket, Key=key)
             deleted_count += 1
         except Exception as e:
-            print(f" [CLEANUP ERROR] Impossibile eliminare {s3_uri}: {e}")
+            print(f" [CLEANUP ERROR] Delete error of {s3_uri}: {e}")
             
-    print(f" [CLEANUP] Rimossi {deleted_count} file temporanei con successo.")
+    print(f" [CLEANUP] Removed {deleted_count} temporary files successfully.")
     
-# ==========================================
-# MASTER EVENT LOOP
-# ==========================================
+# master event loop
 def main():
     print(" Master Node initialized. Waiting for Client jobs...")
 
@@ -727,20 +747,32 @@ def main():
 
                     # 3. Dynamic Data Split
                     calculated_train_rows = None
+                    dataset_variant = job_data.get('dataset_variant', '1M')
 
                     if not tasks_dispatched:
-                        #metti false qui sotto per usare test e train su s3
-                        if False:
-                        # DECOMMENTARE RIGA SOPRA PER EVITARE LO SPLITTING if job_data.get('dynamic_split', True):
+                        bucket = config.get("s3_bucket")
+                        metadata = config['datasets_metadata'].get(dataset, {}).get(dataset_variant)
+
+                        if not metadata:
+                            print(f" [CRITICAL] Dataset variant '{dataset_variant}' not found. Aborting.")
+                            scale_worker_infrastructure(0)
+                            continue
+
+                        train_key = metadata['train_path']
+
+                        split_already_exists = check_s3_file_exists(bucket, train_key)
+
+                        if not split_already_exists:
                             try:
-                                print(f" [PIPELINE] Client requested dataset streaming split...")
-                                calculated_train_rows = execute_streaming_split(dataset)
+                                print(f" [PIPELINE] Dataset split required (Exists: {split_already_exists}. Streaming...")
+                                calculated_train_rows = execute_streaming_split(dataset, dataset_variant)
                             except Exception as e:
                                 print(f" [CRITICAL] Split execution failed: {e}")
-                                scale_worker_infrastructure(0) 
-                                continue 
+                                scale_worker_infrastructure(0)
+                                continue
                         else:
-                            print(" [PIPELINE] Dataset split bypassed. Operating on cached S3 objects.")
+                            print(
+                                " [PIPELINE] Dataset split already exists. Bypassing split to ensure test set consistency.")
                     else:
                         print(" [RECOVERY] Split block skipped. Tasks already dispatched.")
 
@@ -766,7 +798,7 @@ def main():
                                 task_id = train_resp['task_id']
         
                                 if task_id not in completed_train_tasks:
-                                    generate_inference_tasks(job_id, train_resp, dataset)
+                                    generate_inference_tasks(job_id, train_resp, dataset, dataset_variant)
                                     completed_train_tasks.add(task_id)
                                     print(f" [ACK] Worker completed training for {task_id}.")
                                     update_job_state(job_id, completed_train_tasks, s3_inference_results, start_train, tasks_dispatched, training_time, inference_time)
@@ -820,7 +852,7 @@ def main():
                         for i in range(num_workers):
                             weights.append(trees_per_worker + (1 if i < trees_remainder else 0))
 
-                        aggregate_and_evaluate(job_id, dataset, s3_inference_results, num_workers, job_data['num_trees'], weights, training_time, inference_time, job_data.get('strategy', 'homogeneous'))
+                        aggregate_and_evaluate(job_id, dataset, dataset_variant, s3_inference_results, num_workers, job_data['num_trees'], weights, training_time, inference_time, job_data.get('strategy', 'homogeneous'))
                     except Exception as e:
                         print(f" [EVALUATION ERROR] Final aggregation failed: {e}")
                         

@@ -68,7 +68,9 @@ def main():
 
     # Dynamically list all datasets registered in config.json
     for i, ds_name in enumerate(available_datasets, start=1):
-        ds_type = DATASETS_METADATA[ds_name]["type"]
+        # We get the "type" (regression/classification) from the first available variant
+        first_variant = list(DATASETS_METADATA[ds_name].keys())[0]
+        ds_type = DATASETS_METADATA[ds_name][first_variant]["type"]
         print(f" {i}) {ds_name.capitalize()} ({ds_type.capitalize()})")
         dataset_map[str(i)] = ds_name
         
@@ -79,9 +81,32 @@ def main():
             break
         print(" Invalid dataset selection.")
 
+    # ==========================================
+    # DYNAMIC VARIANT SELECTION
+    # ==========================================
+    print("\n" + "-" * 40)
+    print(f" Select Dataset Variant for '{dataset.upper()}':")
+
+    # Retrieves all dynamically discovered variants on S3 for this dataset
+    available_variants = list(DATASETS_METADATA[dataset].keys())
+    variant_map = {}
+
+    for i, variant_name in enumerate(available_variants, start=1):
+        print(f" {i}) {variant_name}")
+        variant_map[str(i)] = variant_name
+
+    while True:
+        var_choice = input(f"\n Enter a number [1-{len(available_variants)}]: ").strip()
+        if var_choice in variant_map:
+            dataset_variant = variant_map[var_choice]
+            break
+        print(" Invalid variant selection.")
+
+
+
     if mode == 'train':
         print("\n" + "-" * 40)
-        print(f"  Hyperparameter Configuration for: {dataset.upper()}")
+        print(f"  Hyperparameter Configuration for: {dataset.upper()}({dataset_variant})")
         
         while True:
             try:
@@ -107,13 +132,14 @@ def main():
 
         # Generate a unique and descriptive Job ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Ex: job_taxi_100trees_4workers_homogeneous_20260328_180000
-        job_id = f"job_{dataset}_{trees}trees_{workers}workers_{strategy_type}_{timestamp}"
+        # Ex: job_taxi_1M_100trees_4workers_homogeneous_20260328_180000
+        job_id = f"job_{dataset}_{dataset_variant}_{trees}trees_{workers}workers_{strategy_type}_{timestamp}"
         
         payload = {
             "mode": "train",
             "job_id": job_id,
             "dataset": dataset,
+            "dataset_variant": dataset_variant,
             "num_workers": workers,
             "num_trees": trees,
             "strategy": strategy_type
@@ -134,29 +160,39 @@ def main():
             # Dividiamo la stringa usando l'underscore per estrarre i metadati
             parts = m.split('_')
             try:
-                # 1. NUOVO FORMATO (Con Strategia)
-                # Es: job_taxi_100trees_4workers_homogeneous_20260328_180000
-                if "homogeneous" in m or "heterogeneous" in m:
+                # 1. NEW FORMAT (Includes variant and strategy)
+                # Ex: job_taxi_1M_100trees_4workers_homogeneous_20260328_180000
+                if ("homogeneous" in m or "heterogeneous" in m) and len(parts) >= 8:
+                    var_label = parts[2]
+                    trees_count = parts[3].replace('trees', '')
+                    workers_count = parts[4].replace('workers', '')
+                    strat_label = parts[5][:4].upper()
+                    raw_date = parts[6]
+                    raw_time = parts[7]
+
+                # 2. INTERMEDIATE FORMAT (Legacy: No variant, but has strategy)
+                elif "homogeneous" in m or "heterogeneous" in m:
+                    var_label = "? "
                     trees_count = parts[2].replace('trees', '')
                     workers_count = parts[3].replace('workers', '')
-                    strat_label = parts[4][:4].upper() # Prende le prime 4 lettere: "HOMO" o "HETE"
+                    strat_label = parts[4][:4].upper()
                     raw_date = parts[5]
                     raw_time = parts[6]
-                    
-                # 2. VECCHIO FORMATO (Senza Strategia, ma con i worker)
-                # Es: job_taxi_100trees_4workers_20260328_180000
+
+                # 3. OLD FORMAT (Legacy: No strategy)
                 elif "workers" in m:
+                    var_label = "? "
                     trees_count = parts[2].replace('trees', '')
                     workers_count = parts[3].replace('workers', '')
-                    strat_label = "N/A " # Forziamo "N/A " per allineamento
+                    strat_label = "N/A "
                     raw_date = parts[4]
                     raw_time = parts[5]
-                    
-                # 3. LEGACY FORMAT (Vecchissimo formato senza worker)
-                # Es: job_taxi_100trees_20260328_180000
+
+                # 4. VERY OLD FORMAT
                 else:
+                    var_label = "? "
                     trees_count = parts[2].replace('trees', '')
-                    workers_count = "? " 
+                    workers_count = "? "
                     strat_label = "N/A "
                     raw_date = parts[3]
                     raw_time = parts[4]
@@ -165,7 +201,7 @@ def main():
                 date_formatted = f"{raw_date[6:8]}/{raw_date[4:6]}/{raw_date[0:4]}"
                 time_formatted = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}"
                 
-                print(f"  [{i}]  Trees: {trees_count:<4} | Workers: {workers_count:<2} | Strat: {strat_label} | Date: {date_formatted} {time_formatted}  (ID: {m})")
+                print(f"  [{i}]  Var: {var_label:<4} | Trees: {trees_count:<4} | Workers: {workers_count:<2} | Strat: {strat_label} | Date: {date_formatted} {time_formatted}  (ID: {m})")
                 
             except Exception:
                 # Se la cartella ha un nome manuale o un formato illeggibile, la stampiamo "grezza" senza far crashare il Client
@@ -181,12 +217,13 @@ def main():
             except ValueError:
                 print(" Please enter a valid number.")
 
-        # Auto-detect required features based on config.json metadata
-        required_features = DATASETS_METADATA[dataset]["features"]
+        # Auto-detect required features based on config.json metadata specifically for this variant
+        required_features = DATASETS_METADATA[dataset][dataset_variant]["features"]
 
         print("\n" + "-" * 40)
         print(" Real-Time Prediction Input")
-        print(f" WARNING: The '{dataset.upper()}' dataset requires EXACTLY {required_features} features!")
+        print(
+            f" WARNING: The '{dataset.upper()}' ({dataset_variant}) dataset requires EXACTLY {required_features} features!")
         
         while True:
             raw_tuple = input(f" Enter {required_features} comma-separated values: ").strip()
@@ -200,12 +237,13 @@ def main():
             except ValueError:
                 print(" [ERROR] Formatting error. Use numbers only (e.g., 10.5, 3).")
 
-        req_id = f"req_{dataset}_{int(datetime.now().timestamp())}"
+        req_id = f"req_{dataset}_{dataset_variant}_{int(datetime.now().timestamp())}"
         
         payload = {
             "mode": "infer",
             "job_id": req_id,
             "dataset": dataset,
+            "dataset_variant": dataset_variant,
             "target_model": target_model,
             "tuple_data": tuple_data
         }

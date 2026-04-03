@@ -9,7 +9,7 @@ class ModelFactory:
         
         # Carica le info sui dataset direttamente dal config.json
         config = load_config()
-        metadata = config.get("datasets_metadata", {})
+        metadata = config.get("dataset_registry", {})
 
         if dataset_name not in metadata:
             raise ValueError(f"Dataset '{dataset_name}' non trovato nel config.json! Aggiungilo prima di procedere.")

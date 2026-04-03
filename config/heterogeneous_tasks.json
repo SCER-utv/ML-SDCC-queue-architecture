@@ -1,5 +1,5 @@
 {
-  "classification": {
+  "airlines": {
     "1": [
       {"max_depth": 27, "min_samples_split": 50, "min_samples_leaf": 6, "max_features": "0.234", "max_samples": "0.564", "criterion": "gini", "class_weight": "balanced", "n_jobs": -1}
     ],
@@ -76,7 +76,7 @@
       {"max_depth": 35, "min_samples_split": 15, "min_samples_leaf": 4, "max_features": "0.280", "max_samples": "0.800", "criterion": "gini", "class_weight": "balanced", "n_jobs": -1}
     ]
   },
-"regression": {
+"taxi": {
     "1": [
       {"max_depth": 54, "min_samples_split": 2, "min_samples_leaf": 4, "max_features": "0.52", "max_samples": "0.7", "criterion": "squared_error", "n_jobs": -1}
     ],
