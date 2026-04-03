@@ -730,7 +730,7 @@ def main():
 
                     if not tasks_dispatched:
                         #metti false qui sotto per usare test e train su s3
-                        if False:
+                        if True:
                         # DECOMMENTARE RIGA SOPRA PER EVITARE LO SPLITTING if job_data.get('dynamic_split', True):
                             try:
                                 print(f" [PIPELINE] Client requested dataset streaming split...")
