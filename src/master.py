@@ -117,10 +117,14 @@ def scale_worker_infrastructure(num_workers):
         print(" [ASG CRITICAL] No instances provided by ASG within timeout!")
 
 
-# Executes an S3 Select query to quickly count rows in a CSV without downloading it. It will be executed when the split is not done.
+# Executes an S3 Select query to quickly count rows in a CSV without downloading it.
 def get_total_rows_s3_select(bucket, key):
     print(f" [S3-SELECT] Executing 'SELECT count(*)' on s3://{bucket}/{key}...")
-    s3 = boto3.client('s3')
+    
+    # CRITICAL FIX: Aumentiamo il timeout di lettura a 300 secondi (5 minuti) per file molto grandi
+    custom_config = botocore.config.Config(read_timeout=300, connect_timeout=60)
+    s3 = boto3.client('s3', region_name=AWS_REGION, config=custom_config)
+    
     try:
         resp = s3.select_object_content(
             Bucket=bucket, Key=key,
@@ -137,7 +141,6 @@ def get_total_rows_s3_select(bucket, key):
     except Exception as e:
         print(f" [S3-SELECT ERROR] Failed query: {e}")
         raise e
-
 
 # Uncomment this 3-way split block if a fixed Test set is required for Grid Search testing
 """ 
