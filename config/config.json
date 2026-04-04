@@ -3,7 +3,7 @@
   "models_directory": "models/checkpoints/",
   "s3_bucket": "drf-bucket-scer-utv",
   "aws_region": "us-east-1",
-  "asg_name": "DRF-Worker-ASG-new",
+  "asg_name": "DRF-Worker-ASG",
 
   "inference_chunksize": 500000,
   
