@@ -55,7 +55,7 @@ GOLD_STANDARD_PARAMS = {
 s3_client = boto3.client('s3', region_name=AWS_REGION)
 
 def save_baseline_metrics(dataset, n_trees, train_time, inf_time, metrics_dict, config):
-    s3_key = f"results/{dataset}/{dataset}_baseline_results.csv"
+    s3_key = f"results/{dataset}/{dataset}_1M_baseline_results.csv"
     
     # 1. Create the base row dictionary with standard information
     row_data = {

@@ -204,7 +204,7 @@ def execute_streaming_split(dataset_name):
 # Downloads dataset via S3 and randomly splits it into Train and Test set, then uploads them back to S3.
 def execute_streaming_split(dataset_name, dataset_variant):
     config = load_config()
-    ratios = config.get("split_ratios", {"train": 0.70, "val": 0.15})
+    ratios = config.get("split_ratios", {"train": 0.70})
     train_threshold = ratios.get("train", 0.70)
 
     print(f" [SPLIT] Starting dynamic streaming split for '{dataset_name}' (Variant: {dataset_variant})...")
@@ -461,12 +461,11 @@ def parse_s3_uri(s3_uri):
 def save_metrics(dataset, dataset_variant, n_workers, n_trees, strategy_name, train_time, inf_time, metrics_dict, config):
     s3_client = boto3.client('s3', region_name=AWS_REGION)
     target_bucket = config.get("s3_bucket", "distributed-random-forest-bkt")
-    s3_key = f"results/{dataset}/{dataset_variant}/distributed_results.csv"
+    s3_key = f"results/{dataset}/{dataset}_{dataset_variant}_distributed_results.csv"
     
     # 1. Create the base row dictionary with standard information
     row_data = {
         'Dataset': dataset,
-        'Variant': dataset_variant,
         'Workers': n_workers, 
         'Trees': n_trees,
         'System_type': "Distributed",
@@ -739,11 +738,6 @@ def main():
                     scale_worker_infrastructure(num_workers)
                     time.sleep(10)
 
-                    # =========================================================
-                    # PLUGGABLE BLOCK: DYNAMIC DATA SPLIT
-                    # To disable splitting during Fault Tolerance tests,
-                    # comment out the line ‘esegui_split_athena(dataset)
-                    # =========================================================
 
                     # 3. Dynamic Data Split
                     calculated_train_rows = None

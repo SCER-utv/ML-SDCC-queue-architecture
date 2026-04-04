@@ -90,9 +90,9 @@ def train(train_task_data, receipt_handle):
 
         ml_handler = ModelFactory.get_model(dataset_name=train_task_data['dataset'])
 
-        print("avvio timer")
+        print("Starting timer...")
         start_time = time.time()
-        print("timer avviato")
+        print("Timer started")
 
         # 2. Training
         rf = ml_handler.process_and_train(df, train_task_data)
@@ -161,13 +161,14 @@ def execute_inference(infer_task_data, receipt_handle):
             test_dataset_uri = infer_task_data['test_dataset_uri']
             ml_handler = ModelFactory.get_model(dataset_name=infer_task_data['dataset'])
 
-            print(f" Calculating predictions (Chunksize: 500k)...")
+            chunk_size = config.get("inference_chunksize", 500000)
+            print(f" Calculating predictions (Chunksize: {chunk_size})...")
             start_time = time.time()
 
             all_predictions = []
-            chunksize = 500000
 
-            for chunk in pd.read_csv(test_dataset_uri, chunksize=chunksize, low_memory=False):
+
+            for chunk in pd.read_csv(test_dataset_uri, chunksize=chunk_size, low_memory=False):
                 # Predict on current chunk only
                 chunk_results = ml_handler.process_and_predict(rf, chunk)
                 all_predictions.append(chunk_results)
@@ -266,7 +267,7 @@ def main():
 
                 # Fault Tolerance: Delete message ONLY upon full success
                 sqs_client.delete_message(QueueUrl=INFER_TASK_QUEUE, ReceiptHandle=current_receipt)
-                print(f" Inferenza {infer_task_data['task_id']} completata con successo!\n")
+                print(f" Inference {infer_task_data['task_id']} completed successfully!\n")
                 
                 continue 
 

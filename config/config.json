@@ -4,6 +4,8 @@
   "s3_bucket": "drf-bucket-scer-utv",
   "aws_region": "us-east-1",
   "asg_name": "DRF-Worker-ASG-new",
+
+  "inference_chunksize": 500000,
   
   "sqs_queues": {
     "client": "https://sqs.us-east-1.amazonaws.com/436688417272/JobRequestQueue.fifo",
@@ -15,8 +17,7 @@
   },
 
   "split_ratios": {
-    "train": 0.70,
-    "val": 0.15
+    "train": 0.70
   },
 
   "dynamodb_table": "JobStatus",
