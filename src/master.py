@@ -286,7 +286,7 @@ def generate_initial_training_tasks(job_data, total_rows=None):
     num_workers = job_data['num_workers']
     num_trees_total = job_data['num_trees']
     dataset = job_data['dataset']
-    dataset_variant = job_data.get('dataset_size', '1M')
+    dataset_variant = job_data.get('dataset_variant', '1M')
     job_id = job_data['job_id']
     strategy = job_data.get('strategy', 'homogeneous')
 
