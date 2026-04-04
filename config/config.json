@@ -1,16 +1,16 @@
 {
   "model_id": "rf_distributed",
   "models_directory": "models/checkpoints/",
-  "s3_bucket": "distributed-random-forest-bkt",
+  "s3_bucket": "drf-bucket-scer-utv",
   "aws_region": "us-east-1",
   "asg_name": "DRF-Worker-ASG-new",
   
   "sqs_queues": {
-    "client": "https://sqs.us-east-1.amazonaws.com/248593862537/JobRequestQueue.fifo",
-    "train_task": "https://sqs.us-east-1.amazonaws.com/248593862537/train-task-queue",
-    "train_response": "https://sqs.us-east-1.amazonaws.com/248593862537/train-response-queue",
-    "infer_task": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-task-queue",
-    "infer_response": "https://sqs.us-east-1.amazonaws.com/248593862537/infer-response-queue",
+    "client": "https://sqs.us-east-1.amazonaws.com/436688417272/JobRequestQueue.fifo",
+    "train_task": "https://sqs.us-east-1.amazonaws.com/436688417272/train-task-queue",
+    "train_response": "https://sqs.us-east-1.amazonaws.com/436688417272/train-response-queue",
+    "infer_task": "https://sqs.us-east-1.amazonaws.com/436688417272/infer-task-queue",
+    "infer_response": "https://sqs.us-east-1.amazonaws.com/436688417272/infer-response-queue",
     "sqs_message_group": "ML_Jobs"
   },
 
