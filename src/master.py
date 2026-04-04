@@ -608,7 +608,6 @@ def aggregate_and_evaluate(job_id, dataset_name, dataset_variant, s3_inference_r
     # Save on S3
     save_metrics(
         dataset=dataset_name,
-        dataset_variant=dataset_variant,
         n_workers=num_workers, 
         n_trees=trees, 
         strategy_name=strategy_name,
