@@ -46,13 +46,13 @@ def count_model_parts(bucket, dataset, target_model):
 # Background thread to periodically extend SQS message visibility timeout
 def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
     while not stop_event.is_set():
-        stop_event.wait(120) 
+        stop_event.wait(20) 
         if not stop_event.is_set():
             try:
                 sqs_client.change_message_visibility(
                     QueueUrl=queue_url,
                     ReceiptHandle=receipt_handle,
-                    VisibilityTimeout=300 
+                    VisibilityTimeout=60 
                 )
                 print(" [HEARTBEAT] Master job timeout reset to 5 minutes.")
             except Exception as e:
