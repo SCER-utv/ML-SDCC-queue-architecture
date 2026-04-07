@@ -36,14 +36,14 @@ s3_client = boto3.client('s3', region_name=AWS_REGION)
 def extend_sqs_visibility(queue_url, receipt_handle, stop_event):
     while not stop_event.is_set():
         # Sleep for 2 minutes. If, in the meantime, the training finishes (stop_event is set), the loop stops before making another call to AWS
-        stop_event.wait(120) 
+        stop_event.wait(20) 
         if not stop_event.is_set():
             try:
                 # Extends the timeout for another 5 minutes
                 sqs_client.change_message_visibility(
                     QueueUrl=queue_url,
                     ReceiptHandle=receipt_handle,
-                    VisibilityTimeout=300 
+                    VisibilityTimeout=60 
                 )
                 print(" [HEARTBEAT] SQS message visibility reset to 5 minutes.")
             except Exception as e:
