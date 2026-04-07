@@ -54,7 +54,7 @@ def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
                     ReceiptHandle=receipt_handle,
                     VisibilityTimeout=300 
                 )
-                print(" [HEARTBEAT] Master job timeout extended by 5 minutes.")
+                print(" [HEARTBEAT] Master job timeout reset to 5 minutes.")
             except Exception as e:
                 pass 
 
