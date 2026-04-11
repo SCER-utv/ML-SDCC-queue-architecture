@@ -939,6 +939,7 @@ def main():
                         }
                         sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
 
+                    """
                     # ==========================================================
                     # START INJECTION FOR TEST 3.3 (MASTER CRASH IN INFERENCE REAL-TIME)
                     # ==========================================================
@@ -948,7 +949,7 @@ def main():
                     print("!"*50 + "\n")
                     time.sleep(15)
                     # ==========================================================
-
+                    """
                     total_received_votes = []
                     read_messages = 0
                     
