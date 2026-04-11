@@ -365,7 +365,22 @@ def generate_initial_training_tasks(job_data, total_rows=None):
 
 
     current_skip = 0
+    
+    """
+    # ==========================================================
+    # TEST 1.3 (CRASH BEFORE SENDING train_tasks)
+    # ==========================================================
+    print("\n" + "!"*50)
+    print(" [TEST 1.3] VULNERABILITY WINDOW OPEN")
+    print(" [TEST 1.3] You have 15 seconds to kill the Master!")
+    print(" [TEST 1.3] Run: sudo docker restart master-node")
+    print("!"*50 + "\n")
 
+    time.sleep(15)
+    # ==========================================================
+    """
+
+    
     print(f" [INFO] Distributing {num_trees_total} trees across {num_workers} training tasks...")
     for i in range(num_workers):
         trees = trees_per_worker + (1 if i < trees_remainder else 0)
@@ -428,7 +443,20 @@ def generate_initial_training_tasks(job_data, total_rows=None):
         current_skip += n_rows
         sqs_client.send_message(QueueUrl=TRAIN_TASK_QUEUE, MessageBody=json.dumps(task_payload))
         print(f" Enqueued {task_payload['task_id']} ({trees} trees).")
-
+        
+        """
+        # ==========================================================
+        # TEST 1.5 (CRASH MID FAN-OUT)
+        # ==========================================================
+        if i == (num_workers // 2) - 1:  # Pauses exactly halfway through the workers
+            print("\n" + "!"*50)
+            print(f" [TEST 1.5] FAN-OUT INTERRUPTED HALFWAY! Sent {i+1} out of {num_workers} tasks.")
+            print(" [TEST 1.5] You have 15 seconds to kill the Master before it finishes sending")
+            print("!"*50 + "\n")
+            time.sleep(15)
+        # ==========================================================
+        """
+        
 
 # Enqueues inference tasks mapped to completed training chunks
 def generate_inference_tasks(job_id, train_resp, dataset, dataset_variant):
@@ -515,6 +543,19 @@ def aggregate_and_evaluate(job_id, dataset_name, dataset_variant, s3_inference_r
     print("\n" + "=" * 50)
     print(" FINAL AGGREGATION & EVALUATION PHASE")
     print("=" * 50)
+    
+    """ 
+    # ==========================================================
+    # TEST 2.4 (MASTER CRASH DURING FINAL AGGREGATION)
+    # ==========================================================
+    print("\n" + "!"*50)
+    print(" [TEST 2.4] CRITICAL PHASE: ALL WORKERS HAVE COMPLETED")
+    print(" [TEST 2.4] You have 15 seconds to kill the Master")
+    print("!"*50 + "\n")
+    time.sleep(15)
+    # ==========================================================
+    """
+
 
     ml_handler = ModelFactory.get_model(dataset_name)
     task_type = getattr(ml_handler, 'task_type', 'classification')
@@ -809,6 +850,19 @@ def main():
                         res_infer = sqs_client.receive_message(QueueUrl=INFER_RESPONSE_QUEUE, MaxNumberOfMessages=10, WaitTimeSeconds=2)
                         if 'Messages' in res_infer:
                             for msg in res_infer['Messages']:
+                            
+                                """
+                                # ==========================================================
+                                # TEST 2.3 (MASTER CRASH ON INFERENCE ACK)
+                                # ==========================================================
+                                print("\n" + "!"*50)
+                                print(" [TEST 2.3] INFERENCE ACK RETRIEVED FROM THE QUEUE")
+                                print(" [TEST 2.3] You have 15 seconds to kill the Master before it deletes the message")
+                                print("!"*50 + "\n")
+                                time.sleep(15)
+                                # ========================================================== 
+                                """
+
                                 body = json.loads(msg['Body'])
                                 task_id = body['task_id']
                                 
@@ -855,7 +909,10 @@ def main():
 
                 # BRANCH B: REAL-TIME SINGLE INFERENCE 
                 elif mode == 'infer':
-                    total_start_time = time.time()
+
+                    # Instead of starting the timer now, use the Client's clock. Use time.time() as a safe fallback.
+                    total_start_time = job_data.get('client_start_time', time.time())
+
                     target_model = job_data['target_model']
                     tuple_data = job_data['tuple_data']
                     
@@ -879,7 +936,17 @@ def main():
                             "model_s3_uri": uri, "tuple_data": tuple_data
                         }
                         sqs_client.send_message(QueueUrl=INFER_TASK_QUEUE, MessageBody=json.dumps(infer_task))
-                        
+
+                    # ==========================================================
+                    # START INJECTION FOR TEST 3.3 (MASTER CRASH IN INFERENCE REAL-TIME)
+                    # ==========================================================
+                    print("\n" + "!"*50)
+                    print(" [TEST 3.2] TASKS SENT TO WORKERS. WAITING FOR RESPONSES...")
+                    print(" [TEST 3.2] You have 15 seconds to restart the Master!")
+                    print("!"*50 + "\n")
+                    time.sleep(15)
+                    # ==========================================================
+
                     total_received_votes = []
                     read_messages = 0
                     
@@ -902,8 +969,8 @@ def main():
                                 
                     pure_inference_time = time.time() - inference_pure_start
 
-                    #commenta la riga soto per test veloci e scommenta il delay
-                    scale_worker_infrastructure(0)
+                    # Comment this line for rapid test 
+                    # scale_worker_infrastructure(0)
                     
                     # Real-Time Aggregation
                     ml_handler = ModelFactory.get_model(dataset)
@@ -926,7 +993,25 @@ def main():
                     print(f" Pure Inference Time (SQS + CPU):      {pure_inference_time:.2f}s")
                     print(f" TOTAL Global System Latency:          {total_run_time:.2f}s")
                     print("=" * 60 + "\n")
-
+                
+                    # REQUEST-REPLY: Send back the reply to the client
+                    client_response_queue = config["sqs_queues"].get("client_response")
+                    if client_response_queue:
+                        try:
+                            response_payload = {
+                                "job_id": job_id,
+                                "prediction": float(final_prediction),
+                                "task_type": task_str,
+                                "total_time_sec": round(total_run_time, 2)
+                            }
+                            sqs_client.send_message(
+                                QueueUrl=client_response_queue,
+                                MessageBody=json.dumps(response_payload)
+                            )
+                            print(f" [SUCCESS] Real-Time Prediction sent back to Client via SQS.")
+                        except Exception as e:
+                            print(f" [ERROR] Failed to send response to client: {e}")
+                    
             finally:
                 # STOP MASTER HEARTBEAT 
                 stop_event_master.set()

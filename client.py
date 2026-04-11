@@ -1,6 +1,7 @@
 import sys
 import json
 from datetime import datetime
+import time
 
 import boto3
 
@@ -29,7 +30,34 @@ def list_available_models(s3_client, bucket, dataset):
             folder_name = obj['Prefix'].replace(prefix, '').strip('/')
             models.append(folder_name)
     return models
-
+    
+# Scans the first row of the dataset to obtain the names of the features
+def get_feature_names_from_s3(s3_client, bucket, s3_key, target_column="Label"):
+    try:
+        # 1. Open a connection to the file. By default, Boto3 does not download everything at once,
+        # but returns a "StreamingBody" that waits to be read.
+        response = s3_client.get_object(Bucket=bucket, Key=s3_key)
+        
+        # 2. iter_lines() reads the network stream line by line.
+        # We use next() to get ONLY the very first line as soon as TCP packets arrive.
+        first_line = next(response['Body'].iter_lines()).decode('utf-8')
+        
+        # 3. CRITICAL: Close the HTTP connection.
+        # This immediately stops the download, saving bandwidth and memory.
+        response['Body'].close()
+        
+        # 4. Format the columns
+        all_columns = [col.strip() for col in first_line.split(',')]
+        
+        # 5. Remove the target column
+        if target_column in all_columns:
+            all_columns.remove(target_column)
+            
+        return all_columns
+        
+    except Exception as e:
+        print(f" [WARNING] Unable to read header from S3: {e}")
+        return []
 
 # Clears the terminal screen for better UI readability
 def clear_screen():
@@ -142,17 +170,20 @@ def main():
             "dataset_variant": dataset_variant,
             "num_workers": workers,
             "num_trees": trees,
-            "strategy": strategy_type
+            "strategy": strategy_type,
+            "client_start_time": time.time()
         }
 
     elif mode == 'infer':
         print("\n" + "-" * 40)
         print(f" [SEARCH] Scanning S3 for saved '{dataset}' models...")
         
-        models = list_available_models(s3_client, S3_BUCKET, dataset)
+        all_models = list_available_models(s3_client, S3_BUCKET, dataset)
+        
+        models = [m for m in all_models if f"_{dataset_variant}_" in m]
         
         if not models:
-            print(f"\n [ERROR] No trained models found for '{dataset}'. Run a training job first!")
+            print(f"\n [ERROR] No trained models found for '{dataset}' (Variant: {dataset_variant}). Run a training job first!")
             sys.exit(0)
             
         print("\n=== AVAILABLE MODELS ===")
@@ -201,7 +232,7 @@ def main():
                 date_formatted = f"{raw_date[6:8]}/{raw_date[4:6]}/{raw_date[0:4]}"
                 time_formatted = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}"
                 
-                print(f"  [{i}]  Var: {var_label:<4} | Trees: {trees_count:<4} | Workers: {workers_count:<2} | Strat: {strat_label} | Date: {date_formatted} {time_formatted}  (ID: {m})")
+                print(f"  [{i}]  Trees: {trees_count:<4} | Workers: {workers_count:<2} | Strat: {strat_label} | Date: {date_formatted} {time_formatted}  (ID: {m})")
                 
             except Exception:
                 # Se la cartella ha un nome manuale o un formato illeggibile, la stampiamo "grezza" senza far crashare il Client
@@ -217,13 +248,20 @@ def main():
             except ValueError:
                 print(" Please enter a valid number.")
 
-        # Auto-detect required features based on config.json metadata specifically for this variant
-        required_features = DATASETS_METADATA[dataset][dataset_variant]["features"]
+        # Retrieve the file path from the config
+        dataset_s3_key = DATASETS_METADATA[dataset][dataset_variant]["test_path"]
+
+        # Dynamically retrieve feature names
+        feature_names = get_feature_names_from_s3(s3_client, S3_BUCKET, dataset_s3_key, target_column="Label")
+        required_features = len(feature_names) if feature_names else DATASETS_METADATA[dataset][dataset_variant]["features"]
 
         print("\n" + "-" * 40)
         print(" Real-Time Prediction Input")
-        print(
-            f" WARNING: The '{dataset.upper()}' ({dataset_variant}) dataset requires EXACTLY {required_features} features!")
+        print(f" WARNING: The '{dataset.upper()}' ({dataset_variant}) dataset requires EXACTLY {required_features} features!")
+
+        if feature_names:
+            print(f"\n Expected layout: \n {', '.join(feature_names)}")
+
         
         while True:
             raw_tuple = input(f" Enter {required_features} comma-separated values: ").strip()
@@ -262,10 +300,69 @@ def main():
         )
         print(f" [SUCCESS] Message enqueued successfully.")
         print(f" [INFO] Generated Job ID: {payload['job_id']}")
-        print("=" * 60 + "\n")
         
+        # SYNC OVER ASYNC RESPONSE HANDLING (REQUEST-REPLY)
         if payload['mode'] == 'infer':
-            print(" -> Check the Master Node logs to see the cluster's real-time prediction!")
+            print("\n [WAIT] Waiting for Real-Time prediction from the cluster...")
+            print(" (If machines are cold-starting, this may take 60-90 seconds)")
+            
+            client_resp_queue = config["sqs_queues"].get("client_response")
+            if not client_resp_queue:
+                print("\n [ERROR] 'client_response' queue URL not found in config.json")
+                sys.exit(1)
+
+            start_wait = time.time()
+            result_found = False
+            
+            # Polling with a 4 minute emergency timeout 
+            while time.time() - start_wait < 240:
+                # Long Polling (WaitTimeSeconds=20) 
+                res = sqs_client.receive_message(
+                    QueueUrl=client_resp_queue, 
+                    MaxNumberOfMessages=1, 
+                    WaitTimeSeconds=20
+                )
+                
+                if 'Messages' in res:
+                    for msg in res['Messages']:
+                        body = json.loads(msg['Body'])
+                        receipt = msg['ReceiptHandle']
+                        
+                        # Matching to find client's message
+                        if body.get("job_id") == payload['job_id']:
+                            print("\n" + "=" * 60)
+                            print(" DISTRIBUTED PREDICTION RECEIVED!")
+                            print("=" * 60)
+                            print(f" Task Type       : {body.get('task_type')}")
+                            print(f" PREDICTION      : >>> {body.get('prediction')} <<<")
+                            print(f" Cluster Latency : {body.get('total_time_sec')} seconds")
+                            print("=" * 60 + "\n")
+                            
+                            # Confirm and destroy the message
+                            sqs_client.delete_message(QueueUrl=client_resp_queue, ReceiptHandle=receipt)
+                            result_found = True
+                            break
+                        else:
+                            # IMMEDIATE NACK: Release the message for the other clients
+                            try:
+                                sqs_client.change_message_visibility(
+                                    QueueUrl=client_resp_queue,
+                                    ReceiptHandle=receipt,
+                                    VisibilityTimeout=0
+                                )
+                            except Exception:
+                                pass 
+                
+                if result_found:
+                    break
+            
+            if not result_found:
+                print("\n [TIMEOUT] The cluster took too long to respond. Check Master logs.")
+                
+        else:
+            # Batch Training Mode: Fire and Forget
+            print("\n -> Distributed Training dispatched! You can monitor the progress on S3 or Master logs.")
+            print("=" * 60 + "\n")
             
     except Exception as e:
         print(f"\n [CRITICAL ERROR] Failed to dispatch SQS message: {e}")

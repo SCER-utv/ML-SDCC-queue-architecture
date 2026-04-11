@@ -9,6 +9,7 @@
   
   "sqs_queues": {
     "client": "https://sqs.us-east-1.amazonaws.com/436688417272/JobRequestQueue.fifo",
+	"client_response": "https://sqs.us-east-1.amazonaws.com/436688417272/ClientResponseQueue",
     "train_task": "https://sqs.us-east-1.amazonaws.com/436688417272/train-task-queue",
     "train_response": "https://sqs.us-east-1.amazonaws.com/436688417272/train-response-queue",
     "infer_task": "https://sqs.us-east-1.amazonaws.com/436688417272/infer-task-queue",
