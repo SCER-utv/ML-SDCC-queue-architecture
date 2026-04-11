@@ -54,7 +54,7 @@ def extend_client_sqs_visibility(queue_url, receipt_handle, stop_event):
                     ReceiptHandle=receipt_handle,
                     VisibilityTimeout=60 
                 )
-                print(" [HEARTBEAT] Master job timeout reset to 5 minutes.")
+                print(" [HEARTBEAT] Master job timeout reset to 1 minute.")
             except Exception as e:
                 pass 
 
@@ -810,6 +810,8 @@ def main():
                                 " [PIPELINE] Dataset split already exists. Bypassing split to ensure test set consistency.")
                     else:
                         print(" [RECOVERY] Split block skipped. Tasks already dispatched.")
+
+                    time.sleep(10)
 
                     # 4. SQS FAN-OUT
                     if not tasks_dispatched:

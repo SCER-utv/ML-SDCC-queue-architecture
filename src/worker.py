@@ -45,7 +45,7 @@ def extend_sqs_visibility(queue_url, receipt_handle, stop_event):
                     ReceiptHandle=receipt_handle,
                     VisibilityTimeout=60 
                 )
-                print(" [HEARTBEAT] SQS message visibility reset to 5 minutes.")
+                print(" [HEARTBEAT] SQS message visibility reset to 1 minute.")
             except Exception as e:
                 print(f" [HEARTBEAT] SQS extension error (likely already deleted): {e}")
 
